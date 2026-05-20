@@ -27,6 +27,8 @@ from app.routers import (
 from app.routers.ontology import rules_router
 from app.routers.analysis import analysis_router as coco_analysis_router
 from app.routers import sharding as sharding_router
+from app.routers.versions import router as versions_router
+from app.routers.lineage import model_router as model_versions_router, lineage_router
 
 settings = get_settings()
 
@@ -80,6 +82,10 @@ app.include_router(ontology_router.router, prefix=API_PREFIX)
 app.include_router(rules_router, prefix=API_PREFIX)
 app.include_router(export_router.router, prefix=API_PREFIX)
 app.include_router(sharding_router.router, prefix=API_PREFIX)
+# ── 버저닝 & 리니지 ──────────────────────────────────────────
+app.include_router(versions_router, prefix=API_PREFIX)
+app.include_router(model_versions_router, prefix=API_PREFIX)
+app.include_router(lineage_router, prefix=API_PREFIX)
 
 
 @app.get("/api/health")

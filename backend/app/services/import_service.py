@@ -35,6 +35,9 @@ from app.services.file_handler import (
     SUPPORTED_FORMATS,
 )
 
+# 배치 flush 크기 — 이미지 N장마다 한 번 DB 왕복
+BATCH_SIZE = 100
+
 
 # ── 형식 자동 감지 ───────────────────────────────────────────────────
 
@@ -72,11 +75,9 @@ def _find_image_prefix(zf: zipfile.ZipFile, base_dir: str) -> str:
     images/ 하위가 있으면 그쪽을 우선 반환, 없으면 base_dir 자체 반환.
     """
     names = zf.namelist()
-    # base_dir/images/ 에 이미지가 있는지 확인
     sub = (base_dir.rstrip("/") + "/images/").lstrip("/")
     if any(n.startswith(sub) and _is_image_file(n) for n in names):
         return sub
-    # base_dir/ 직접 이미지
     base = (base_dir.rstrip("/") + "/").lstrip("/")
     return base
 
@@ -87,8 +88,6 @@ def _parse_coco_structure(zf: zipfile.ZipFile) -> list[dict]:
 
     구조 B — 우선 탐지:
         split_dir/*annotation*.json  +  split_dir/ 또는 split_dir/images/ 에 이미지
-        split_dir 이름은 무관 (train, val, test, valid, 커스텀 이름 모두 허용)
-
     구조 A — 폴백:
         annotations/*.json  +  images/  (또는 루트)
     """
@@ -98,15 +97,11 @@ def _parse_coco_structure(zf: zipfile.ZipFile) -> list[dict]:
     splits: list[dict] = []
 
     # ── 구조 B 탐지 ─────────────────────────────────────────────
-    # depth-1 JSON: 경로 부분이 정확히 2개 (split_dir/something.json)
-    # 그리고 해당 dir 안에 이미지가 있어야 함
-    split_json: dict[str, str] = {}   # split_dir -> json_path (첫 번째 우선)
+    split_json: dict[str, str] = {}
     for j in json_files:
         parts = Path(j).parts
         if len(parts) == 2:
             split_dir = parts[0]
-            # "annotation" 이라는 단어가 파일명에 있거나, 일반적인 JSON 파일
-            # split_dir 안에 이미지가 있는지 추가 확인
             has_imgs_in_split = any(
                 n.startswith(split_dir + "/") and _is_image_file(n) for n in names
             )
@@ -120,19 +115,16 @@ def _parse_coco_structure(zf: zipfile.ZipFile) -> list[dict]:
         return splits
 
     # ── 구조 A 탐지 ─────────────────────────────────────────────
-    # annotations/ 디렉터리 안의 JSON
     anno_jsons = [
         j for j in json_files
         if len(Path(j).parts) >= 2 and Path(j).parts[-2].lower() == "annotations"
     ]
     if not anno_jsons:
-        # 루트에 "annotation" 이라는 단어가 있는 JSON
         anno_jsons = [
             j for j in json_files
             if "annotation" in Path(j).name.lower() and len(Path(j).parts) == 1
         ]
     if not anno_jsons:
-        # 모든 루트 JSON 시도
         anno_jsons = [j for j in json_files if len(Path(j).parts) == 1]
     if not anno_jsons:
         anno_jsons = json_files[:1]
@@ -140,11 +132,9 @@ def _parse_coco_structure(zf: zipfile.ZipFile) -> list[dict]:
     for j in anno_jsons:
         parent_parts = Path(j).parts
         if len(parent_parts) >= 2:
-            # annotations/xxx.json → 상위 디렉터리의 images/
             base = "/".join(parent_parts[:-2]) if len(parent_parts) > 2 else ""
             image_prefix = _find_image_prefix(zf, base) if base else "images/"
         else:
-            # 루트 JSON → images/ 또는 루트 직접
             has_images_dir = any(n.startswith("images/") and _is_image_file(n) for n in names)
             image_prefix = "images/" if has_images_dir else ""
         splits.append({"json": j, "image_prefix": image_prefix})
@@ -172,7 +162,7 @@ async def _import_coco(
     zf: zipfile.ZipFile,
     existing_hashes: set[str],
 ) -> dict[str, int]:
-    """COCO JSON ZIP 임포트. 추가/스킵/에러 카운트 반환."""
+    """COCO JSON ZIP 임포트. 배치 flush로 DB 왕복 최소화."""
     dest_dir = get_dataset_upload_dir(dataset_id)
     splits = _parse_coco_structure(zf)
 
@@ -200,14 +190,16 @@ async def _import_coco(
             cls = await get_or_create_class(db, dataset_id, name)
             class_map[coco_id] = cls.id
 
-        # ── 이미지 처리 ──────────────────
-        # ZIP 내 파일명 소문자 역매핑 (대소문자 불일치 대응)
+        # ── 이미지 처리 (배치 flush) ──────
         lower_map: dict[str, str] = {n.lower(): n for n in zf.namelist()}
 
         # coco image_id → DB image id (스킵된 이미지 = -1)
         coco_img_id_to_db: dict[int, int] = {}
-        # coco image_id → (width, height) — 어노테이션 정규화용
+        # coco image_id → (width, height)
         coco_img_size: dict[int, tuple[int, int]] = {}
+
+        # 배치 수집: (coco_img_id, Image 객체) 쌍
+        pending: list[tuple[int, Image]] = []
 
         for img_info in coco.get("images", []):
             filename: str = img_info.get("file_name", "")
@@ -215,7 +207,6 @@ async def _import_coco(
             coco_w: int = img_info.get("width") or 0
             coco_h: int = img_info.get("height") or 0
 
-            # ZIP 내 경로 탐색 (여러 후보 순서대로)
             stem_name = Path(filename).name
             candidates = [
                 image_prefix + filename,
@@ -246,13 +237,11 @@ async def _import_coco(
             if md5 in existing_hashes:
                 skipped += 1
                 coco_img_id_to_db[coco_img_id] = -1
-                # 크기 정보는 COCO JSON에서 가져옴 (어노테이션 정규화용)
                 coco_img_size[coco_img_id] = (coco_w or 1, coco_h or 1)
                 continue
 
             abs_path, rel_path = _save_image_bytes(data, stem_name, dest_dir)
 
-            # 실제 이미지 크기 (COCO 메타가 없으면 직접 측정)
             if coco_w and coco_h:
                 w, h = coco_w, coco_h
             else:
@@ -277,21 +266,34 @@ async def _import_coco(
                 phash=phash,
             )
             db.add(img_obj)
-            await db.flush()   # id 확보
-
-            existing_hashes.add(md5)
-            coco_img_id_to_db[coco_img_id] = img_obj.id
+            pending.append((coco_img_id, img_obj))
             coco_img_size[coco_img_id] = (w, h)
+            existing_hashes.add(md5)
             added += 1
 
+            # BATCH_SIZE마다 중간 flush → id 확보 후 매핑
+            if len(pending) >= BATCH_SIZE:
+                await db.flush()
+                for c_id, img in pending:
+                    coco_img_id_to_db[c_id] = img.id
+                pending.clear()
+
+        # 나머지 이미지 flush
+        if pending:
+            await db.flush()
+            for c_id, img in pending:
+                coco_img_id_to_db[c_id] = img.id
+            pending.clear()
+
         # ── 어노테이션 처리 ──────────────
+        ann_batch: list[Annotation] = []
         for ann_info in coco.get("annotations", []):
             coco_img_id = ann_info.get("image_id")
             db_img_id = coco_img_id_to_db.get(coco_img_id)
             if db_img_id is None or db_img_id == -1:
                 continue
 
-            bbox = ann_info.get("bbox")   # [x_min, y_min, w, h] in pixels
+            bbox = ann_info.get("bbox")  # [x_min, y_min, w, h] in pixels
             if not bbox or len(bbox) < 4:
                 continue
 
@@ -301,7 +303,7 @@ async def _import_coco(
             img_w, img_h = coco_img_size.get(coco_img_id, (1, 1))
             x_min_px, y_min_px, w_px, h_px = (float(v) for v in bbox)
 
-            db.add(Annotation(
+            ann_batch.append(Annotation(
                 image_id=db_img_id,
                 class_id=db_class_id,
                 annotation_type="bbox",
@@ -311,7 +313,15 @@ async def _import_coco(
                 bbox_h=h_px / img_h,
             ))
 
-    await db.flush()
+            if len(ann_batch) >= BATCH_SIZE:
+                db.add_all(ann_batch)
+                await db.flush()
+                ann_batch.clear()
+
+        if ann_batch:
+            db.add_all(ann_batch)
+            await db.flush()
+
     return {"added": added, "skipped": skipped, "errors": errors}
 
 
@@ -321,7 +331,6 @@ def _load_yolo_classes(zf: zipfile.ZipFile) -> list[str]:
     """data.yaml 또는 classes.txt 에서 클래스 이름 목록 반환."""
     names_in_zip = zf.namelist()
 
-    # data.yaml / dataset.yaml 탐색
     for n in names_in_zip:
         if Path(n).name.lower() in ("data.yaml", "dataset.yaml"):
             try:
@@ -336,7 +345,6 @@ def _load_yolo_classes(zf: zipfile.ZipFile) -> list[str]:
             except Exception:
                 pass
 
-    # classes.txt 탐색
     for n in names_in_zip:
         if Path(n).name.lower() == "classes.txt":
             try:
@@ -357,7 +365,7 @@ def _find_label_file(zf: zipfile.ZipFile, img_zip_path: str) -> str | None:
     lower_map = {n.lower(): n for n in zf.namelist()}
 
     stem = Path(img_zip_path).stem
-    parts = Path(img_zip_path).parts   # e.g. ('train', 'images', 'img.jpg')
+    parts = Path(img_zip_path).parts
 
     candidates: list[str] = []
 
@@ -366,7 +374,6 @@ def _find_label_file(zf: zipfile.ZipFile, img_zip_path: str) -> str | None:
         split_prefix = "/".join(parts[:-2])
         candidates.append(f"{split_prefix}/labels/{stem}.txt")
 
-    # 단순 labels/ 디렉터리
     candidates += [
         f"labels/{stem}.txt",
         f"labels/train/{stem}.txt",
@@ -374,14 +381,12 @@ def _find_label_file(zf: zipfile.ZipFile, img_zip_path: str) -> str | None:
         f"labels/valid/{stem}.txt",
         f"labels/test/{stem}.txt",
     ]
-    # split 이름이 있을 때 (e.g. train/img.jpg → train/labels/img.txt)
     if len(parts) >= 2:
         split_prefix = parts[0]
         candidates += [
             f"{split_prefix}/labels/{stem}.txt",
             f"{split_prefix}/{stem}.txt",
         ]
-    # 루트
     candidates.append(f"{stem}.txt")
 
     for c in candidates:
@@ -398,10 +403,10 @@ async def _import_yolo(
     zf: zipfile.ZipFile,
     existing_hashes: set[str],
 ) -> dict[str, int]:
-    """YOLO 형식 ZIP 임포트."""
+    """YOLO 형식 ZIP 임포트. 배치 flush로 DB 왕복 최소화."""
     dest_dir = get_dataset_upload_dir(dataset_id)
     class_names = _load_yolo_classes(zf)
-    class_db_map: dict[int, int] = {}   # yolo_idx → DB class id
+    class_db_map: dict[int, int] = {}
 
     async def resolve_class(yolo_idx: int) -> int | None:
         if yolo_idx in class_db_map:
@@ -411,13 +416,16 @@ async def _import_yolo(
         class_db_map[yolo_idx] = cls.id
         return cls.id
 
-    # 이미지 파일만 수집 (macOS 숨김 파일 제외)
     image_members = [
         n for n in zf.namelist()
         if _is_image_file(n) and not n.startswith("__MACOSX")
     ]
 
     added = skipped = errors = 0
+
+    # ── 1단계: 이미지 파일 저장 + 배치 flush ────────────────────
+    # (zip_member, Image 객체) 쌍 수집
+    pending: list[tuple[str, Image]] = []
 
     for zip_member in image_members:
         filename = Path(zip_member).name
@@ -454,69 +462,90 @@ async def _import_yolo(
             phash=phash,
         )
         db.add(img_obj)
-        await db.flush()
-
+        pending.append((zip_member, img_obj))
         existing_hashes.add(md5)
         added += 1
 
-        # 대응 라벨 파일 처리
+        # BATCH_SIZE마다 중간 flush
+        if len(pending) >= BATCH_SIZE:
+            await db.flush()
+            # 어노테이션은 아직 처리하지 않음 — id만 확보
+            # (pending 유지: 어노테이션 처리 단계에서 사용)
+            # pending을 비우지 않고 누적 — 어노테이션 루프에서 모두 사용
+            pass
+
+    # 나머지 이미지 flush (id 확보)
+    if pending or True:
+        await db.flush()
+
+    # ── 2단계: 어노테이션 처리 ───────────────────────────────────
+    ann_batch: list[Annotation] = []
+
+    for zip_member, img_obj in pending:
         label_path = _find_label_file(zf, zip_member)
-        if label_path is None:
+        if not label_path:
             continue
 
         try:
-            label_content = zf.read(label_path).decode("utf-8")
+            label_text = zf.read(label_path).decode("utf-8")
         except Exception:
             continue
 
-        for line in label_content.splitlines():
-            parts = line.strip().split()
-            if len(parts) < 5:
+        for line in label_text.splitlines():
+            parts_line = line.strip().split()
+            if len(parts_line) < 5:
                 continue
             try:
-                yolo_idx = int(parts[0])
-                cx, cy, bw, bh = (float(p) for p in parts[1:5])
+                yolo_idx = int(parts_line[0])
+                cx, cy, bw, bh = (float(p) for p in parts_line[1:5])
             except ValueError:
                 continue
 
             db_class_id = await resolve_class(yolo_idx)
-            db.add(Annotation(
+            ann_batch.append(Annotation(
                 image_id=img_obj.id,
                 class_id=db_class_id,
                 annotation_type="bbox",
-                bbox_x=cx - bw / 2,
-                bbox_y=cy - bh / 2,
+                bbox_x=max(0.0, cx - bw / 2),
+                bbox_y=max(0.0, cy - bh / 2),
                 bbox_w=bw,
                 bbox_h=bh,
             ))
 
-    await db.flush()
+            if len(ann_batch) >= BATCH_SIZE:
+                db.add_all(ann_batch)
+                await db.flush()
+                ann_batch.clear()
+
+    if ann_batch:
+        db.add_all(ann_batch)
+        await db.flush()
+
     return {"added": added, "skipped": skipped, "errors": errors}
 
 
-# ── 공개 진입점 ─────────────────────────────────────────────────────
+# ── 엔트리포인트 ────────────────────────────────────────────────────
 
 async def import_dataset_zip(
     db: AsyncSession,
     dataset_id: int,
     zip_bytes: bytes,
+    existing_hashes: set[str],
     force_format: str | None = None,
-) -> dict[str, Any]:
+) -> dict:
     """
-    어노테이션 포함 ZIP을 임포트하고 결과 통계를 반환.
+    ZIP 바이트를 받아 COCO 또는 YOLO 형식으로 임포트합니다.
 
-    Parameters
-    ----------
-    force_format : 'coco' | 'yolo' | None
-        None이면 ZIP 내용으로 자동 감지
+    Args:
+        db: 샤드 DB 세션
+        dataset_id: 대상 데이터셋 ID
+        zip_bytes: ZIP 파일 바이트
+        existing_hashes: 이미 DB에 있는 MD5 해시 집합 (중복 방지)
+        force_format: 'coco' | 'yolo' | None (None이면 자동 감지)
+
+    Returns:
+        {"format": str, "added": int, "skipped": int, "errors": int}
     """
-    from sqlalchemy import select
-
-    existing_result = await db.execute(
-        select(Image.file_hash).where(Image.dataset_id == dataset_id)
-    )
-    existing_hashes: set[str] = {row[0] for row in existing_result if row[0]}
-
     try:
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
     except zipfile.BadZipFile:
@@ -525,8 +554,10 @@ async def import_dataset_zip(
     fmt = force_format or _detect_format(zf.namelist())
 
     if fmt == "coco":
-        stats = await _import_coco(db, dataset_id, zf, existing_hashes)
+        result = await _import_coco(db, dataset_id, zf, existing_hashes)
+    elif fmt == "yolo":
+        result = await _import_yolo(db, dataset_id, zf, existing_hashes)
     else:
-        stats = await _import_yolo(db, dataset_id, zf, existing_hashes)
+        raise ValueError(f"지원하지 않는 형식: {fmt}")
 
-    return {"format": fmt, **stats}
+    return {"format": fmt, **result}

@@ -7,6 +7,7 @@ import Analysis from './pages/Analysis'
 import Refinement from './pages/Refinement'
 import Ontology from './pages/Ontology'
 import Export from './pages/Export'
+import Versioning from './pages/Versioning'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="refinement" element={<Refinement />} />
           <Route path="ontology" element={<Ontology />} />
           <Route path="export" element={<Export />} />
+          <Route path="versioning" element={<Versioning />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

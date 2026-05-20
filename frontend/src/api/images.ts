@@ -38,6 +38,7 @@ export const imagesApi = {
     ).then(r => r.data)
   },
 
+  // 202 Accepted -> task_id 반환, pollImportTask 으로 완료 대기
   uploadZipAnnotated: (
     datasetId: number,
     file: File,
@@ -47,7 +48,7 @@ export const imagesApi = {
     const formData = new FormData()
     formData.append('file', file)
     const params = format ? `?fmt=${format}` : ''
-    return client.post<{ format: string; added: number; skipped: number; errors: number }>(
+    return client.post<{ task_id: string; status: string }>(
       `/datasets/${datasetId}/images/upload-zip-annotated${params}`,
       formData,
       {
@@ -66,10 +67,47 @@ export const imagesApi = {
     projectId: string,
     version: number,
   ) =>
-    client.post<{ format: string; added: number; skipped: number; errors: number }>(
+    client.post<{ task_id: string; status: string }>(
       `/datasets/${datasetId}/images/import-roboflow`,
       { api_key: apiKey, workspace, project_id: projectId, version }
     ).then(r => r.data),
+
+  // 태스크 완료까지 폴링 (최대 5분, 2초 간격)
+  pollImportTask: (
+    datasetId: number,
+    taskId: string,
+    onStatus?: (s: string) => void,
+  ): Promise<{ format?: string; added: number; skipped: number; errors: number }> => {
+    return new Promise((resolve, reject) => {
+      const MAX_ATTEMPTS = 150  // 150 x 2s = 5분
+      let attempts = 0
+      const timer = setInterval(async () => {
+        attempts++
+        try {
+          const res = await client.get<{
+            status: string
+            result: { format?: string; added: number; skipped: number; errors: number } | null
+            error: string | null
+          }>(`/datasets/${datasetId}/images/tasks/${taskId}`)
+          const { status, result, error } = res.data
+          onStatus?.(status)
+          if (status === 'done') {
+            clearInterval(timer)
+            resolve(result ?? { added: 0, skipped: 0, errors: 0 })
+          } else if (status === 'error') {
+            clearInterval(timer)
+            reject(new Error(error ?? '임포트 실패'))
+          } else if (attempts >= MAX_ATTEMPTS) {
+            clearInterval(timer)
+            reject(new Error('임포트 시간 초과'))
+          }
+        } catch (e) {
+          clearInterval(timer)
+          reject(e)
+        }
+      }, 2000)
+    })
+  },
 
   delete: (datasetId: number, imageId: number) =>
     client.delete(`/datasets/${datasetId}/images/${imageId}`),

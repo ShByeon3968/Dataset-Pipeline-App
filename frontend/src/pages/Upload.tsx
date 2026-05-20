@@ -71,34 +71,49 @@ export default function UploadPage() {
   })
 
   const annotatedMutation = useMutation({
-    mutationFn: (file: File) =>
-      imagesApi.uploadZipAnnotated(
+    mutationFn: async (file: File) => {
+      // 1단계: 업로드 → task_id 즉시 반환 (202)
+      const { task_id } = await imagesApi.uploadZipAnnotated(
         selectedDataset!.id, file,
         annotatedFormat === 'auto' ? undefined : annotatedFormat,
         setProgress,
-      ),
+      )
+      // 2단계: 완료까지 폴링
+      return imagesApi.pollImportTask(selectedDataset!.id, task_id, (s) => {
+        if (s === 'running') toast.loading('임포트 처리 중…', { id: task_id })
+      })
+    },
     onSuccess: (res) => {
+      toast.dismiss()
       qc.invalidateQueries({ queryKey: ['datasets'] })
       qc.invalidateQueries({ queryKey: ['images-preview', selectedDataset?.id] })
-      toast.success(`[${res.format.toUpperCase()}] ${res.added}개 추가, ${res.skipped}개 중복, ${res.errors}개 오류`)
+      const fmt = res.format ? `[${res.format.toUpperCase()}] ` : ''
+      toast.success(`${fmt}${res.added}개 추가, ${res.skipped}개 중복, ${res.errors}개 오류`)
       setProgress(0); setPreviewPage(0)
     },
-    onError: (e: Error) => { toast.error(e.message); setProgress(0) },
+    onError: (e: Error) => { toast.dismiss(); toast.error(e.message); setProgress(0) },
   })
 
   const roboflowMutation = useMutation({
-    mutationFn: () =>
-      imagesApi.importRoboflow(
+    mutationFn: async () => {
+      // 1단계: 요청 → task_id 즉시 반환 (202)
+      const { task_id } = await imagesApi.importRoboflow(
         selectedDataset!.id,
         rfApiKey, rfWorkspace, rfProject, parseInt(rfVersion) || 1,
-      ),
+      )
+      // 2단계: 완료까지 폴링
+      return imagesApi.pollImportTask(selectedDataset!.id, task_id, (s) => {
+        if (s === 'running') toast.loading('Roboflow 임포트 처리 중…', { id: task_id })
+      })
+    },
     onSuccess: (res) => {
+      toast.dismiss()
       qc.invalidateQueries({ queryKey: ['datasets'] })
       qc.invalidateQueries({ queryKey: ['images-preview', selectedDataset?.id] })
       toast.success(`[COCO] ${res.added}개 추가, ${res.skipped}개 중복, ${res.errors}개 오류`)
       setPreviewPage(0)
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { toast.dismiss(); toast.error(e.message) },
   })
 
   const deleteImageMutation = useMutation({
@@ -365,13 +380,20 @@ export default function UploadPage() {
               </div>
             )}
 
+            {/* 업로드 중 폴링 상태 안내 */}
+            {(annotatedMutation.isPending) && (
+              <p className="text-xs text-blue-500 text-center mt-2 animate-pulse">
+                백그라운드에서 임포트 처리 중입니다. 완료까지 기다려 주세요…
+              </p>
+            )}
+
             <button
               onClick={handleUpload}
               disabled={isUploading || acceptedFiles.length === 0}
               className="btn-primary w-full mt-4 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               <UploadIcon className="w-4 h-4" />
-              {isUploading ? '업로드 중...' : '업로드'}
+              {isUploading ? '처리 중...' : '업로드'}
             </button>
           </>
         )}
@@ -419,23 +441,23 @@ export default function UploadPage() {
                 {/* 삭제 버튼 — hover 시 표시 */}
                 <button
                   onClick={() => {
-                    if (confirm(`'${img.filename}' 을(를) 삭제할까요?\n연결된 주석도 함께 삭제됩니다.`)) {
+                    if (window.confirm(`'${img.filename}' 을(를) 삭제할까요?\n연결된 주석도 함께 삭제됩니다.`)) {
                       deleteImageMutation.mutate(img.id)
                     }
                   }}
-                  disabled={deleteImageMutation.isPending}
-                  className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 disabled:opacity-40"
+                  className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
                   title="이미지 삭제"
                 >
                   <Trash2 className="w-3 h-3" />
                 </button>
               </div>
             ))}
+            {imagesData?.items.length === 0 && (
+              <p className="col-span-full text-center text-gray-400 text-sm py-8">
+                이미지가 없습니다. 업로드하세요.
+              </p>
+            )}
           </div>
-
-          {imagesData?.items.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-8">업로드된 이미지가 없습니다.</p>
-          )}
         </div>
       )}
     </div>

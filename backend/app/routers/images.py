@@ -4,12 +4,17 @@
 filepath 컬럼에는 상대경로가 저장되므로,
 실제 파일 접근 시 resolve_filepath()로 절대경로를 복원합니다.
 """
+import io as _io
 import os
+import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel as _BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sa_delete
+
 from app.sharding.router import get_sharded_db
 from app.models import Image, Annotation, Dataset
 from app.schemas.image import ImageRead, ImageList
@@ -22,6 +27,23 @@ from app.services.file_handler import (
 
 router = APIRouter(prefix="/datasets/{dataset_id}/images", tags=["images"])
 
+# ── 백그라운드 태스크 상태 저장소 (프로세스 재시작 시 초기화) ────────
+# 영속성이 필요한 경우 Redis hash로 교체하세요.
+_task_store: dict[str, dict] = {}
+
+
+# ── 태스크 상태 조회 ─────────────────────────────────────────────────
+
+@router.get("/tasks/{task_id}")
+async def get_import_task_status(task_id: str):
+    """백그라운드 임포트 태스크 진행 상태 조회"""
+    info = _task_store.get(task_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다.")
+    return info
+
+
+# ── 이미지 목록 ──────────────────────────────────────────────────────
 
 @router.get("", response_model=ImageList)
 async def list_images(
@@ -46,6 +68,8 @@ async def list_images(
         total=total,
     )
 
+
+# ── 개별 파일 업로드 ─────────────────────────────────────────────────
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
 async def upload_images(
@@ -96,6 +120,8 @@ async def upload_images(
     return {"added": len(added), "skipped": len(skipped), "errors": errors}
 
 
+# ── ZIP 업로드 (어노테이션 없음) ─────────────────────────────────────
+
 @router.post("/upload-zip", status_code=status.HTTP_201_CREATED)
 async def upload_zip(
     dataset_id: int,
@@ -137,14 +163,21 @@ async def upload_zip(
     return {"added": added}
 
 
-@router.post("/upload-zip-annotated", status_code=status.HTTP_201_CREATED)
+# ── ZIP + 어노테이션 업로드 (백그라운드 처리) ────────────────────────
+
+@router.post("/upload-zip-annotated", status_code=status.HTTP_202_ACCEPTED)
 async def upload_zip_annotated(
     dataset_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     fmt: str | None = Query(default=None, description="coco | yolo | None(자동감지)"),
     db: AsyncSession = Depends(get_sharded_db),
 ):
-    """COCO / YOLO 어노테이션 포함 ZIP 업로드"""
+    """
+    COCO / YOLO 어노테이션 포함 ZIP 업로드.
+    즉시 task_id를 반환하고, 실제 임포트는 백그라운드에서 처리합니다.
+    GET /datasets/{dataset_id}/images/tasks/{task_id} 로 진행 상태를 확인하세요.
+    """
     ds = await db.get(Dataset, dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
@@ -152,26 +185,41 @@ async def upload_zip_annotated(
     if fmt and fmt.lower() not in ("coco", "yolo"):
         raise HTTPException(status_code=400, detail="fmt는 'coco' 또는 'yolo'만 허용됩니다.")
 
-    from app.services.import_service import import_dataset_zip
-
     zip_bytes = await file.read()
+
     existing = await db.execute(
         select(Image.file_hash).where(Image.dataset_id == dataset_id)
     )
     existing_hashes = {row[0] for row in existing if row[0]}
 
-    try:
-        result = await import_dataset_zip(
-            db, dataset_id, zip_bytes, existing_hashes,
-            force_format=fmt.lower() if fmt else None,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"가져오기 실패: {e}")
+    task_id = str(uuid.uuid4())
+    _task_store[task_id] = {"status": "pending", "result": None, "error": None}
 
-    return result
+    from app.services.import_service import import_dataset_zip
+    from app.sharding.router import shard_router
 
+    async def _run():
+        _task_store[task_id]["status"] = "running"
+        # 백그라운드에서는 새로운 DB 세션을 사용
+        bg_session = await shard_router.get_session_for_dataset(dataset_id)
+        try:
+            result = await import_dataset_zip(
+                bg_session, dataset_id, zip_bytes, existing_hashes,
+                force_format=fmt.lower() if fmt else None,
+            )
+            await bg_session.commit()
+            _task_store[task_id] = {"status": "done", "result": result, "error": None}
+        except Exception as e:
+            await bg_session.rollback()
+            _task_store[task_id] = {"status": "error", "result": None, "error": str(e)}
+        finally:
+            await bg_session.close()
+
+    background_tasks.add_task(_run)
+    return {"task_id": task_id, "status": "pending"}
+
+
+# ── 단일 이미지 조회 ─────────────────────────────────────────────────
 
 @router.get("/{image_id}", response_model=ImageRead)
 async def get_image(
@@ -183,6 +231,8 @@ async def get_image(
     return ImageRead.model_validate(img)
 
 
+# ── 이미지 파일 서빙 ─────────────────────────────────────────────────
+
 @router.get("/{image_id}/file")
 async def serve_image_file(
     dataset_id: int, image_id: int, db: AsyncSession = Depends(get_sharded_db)
@@ -191,7 +241,6 @@ async def serve_image_file(
     if not img or img.dataset_id != dataset_id:
         raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
 
-    # 상대경로 → 절대경로 복원 (기존 절대경로 레코드 하위 호환)
     abs_path = resolve_filepath(img.filepath)
     if not os.path.exists(abs_path):
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
@@ -207,6 +256,8 @@ async def serve_image_file(
     return FileResponse(abs_path, media_type=media_type)
 
 
+# ── 이미지 삭제 ──────────────────────────────────────────────────────
+
 @router.delete("/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_image(
     dataset_id: int, image_id: int, db: AsyncSession = Depends(get_sharded_db)
@@ -215,10 +266,8 @@ async def delete_image(
     if not img or img.dataset_id != dataset_id:
         raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
 
-    # 어노테이션 cascade 삭제
     await db.execute(sa_delete(Annotation).where(Annotation.image_id == image_id))
 
-    # 파일 삭제
     try:
         abs_path = resolve_filepath(img.filepath)
         delete_file(abs_path)
@@ -229,8 +278,7 @@ async def delete_image(
     await db.commit()
 
 
-# ── Roboflow 가져오기 ────────────────────────────────────────────────
-from pydantic import BaseModel as _BaseModel
+# ── Roboflow 가져오기 (백그라운드 처리) ──────────────────────────────
 
 class RoboflowImportRequest(_BaseModel):
     api_key: str
@@ -239,13 +287,17 @@ class RoboflowImportRequest(_BaseModel):
     version: int = 1
 
 
-@router.post("/import-roboflow", status_code=status.HTTP_201_CREATED)
+@router.post("/import-roboflow", status_code=status.HTTP_202_ACCEPTED)
 async def import_from_roboflow(
     dataset_id: int,
     req: RoboflowImportRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_sharded_db),
 ):
-    """Roboflow 프로젝트를 COCO 형식으로 다운로드 후 가져오기"""
+    """
+    Roboflow 프로젝트를 COCO 형식으로 다운로드 후 백그라운드에서 가져오기.
+    즉시 task_id를 반환합니다.
+    """
     ds = await db.get(Dataset, dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
@@ -256,38 +308,55 @@ async def import_from_roboflow(
         raise HTTPException(status_code=501, detail="roboflow 패키지가 설치되지 않았습니다.")
 
     from app.core.config import get_settings as _settings
-    import tempfile, zipfile as _zf
+    from app.sharding.router import shard_router
+    from app.services.import_service import import_dataset_zip
 
     settings = _settings()
-    dest = os.path.join(settings.uploads_dir, f"roboflow_{dataset_id}_{req.project_id}_v{req.version}")
-
-    try:
-        download_dir = download_dataset(
-            req.api_key, req.workspace, req.project_id, req.version, dest
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Roboflow 다운로드 실패: {e}")
-
-    # 다운로드 디렉토리를 ZIP으로 묶어 import_service로 처리
-    import io as _io
-    buf = _io.BytesIO()
-    with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as zf:
-        for root, _, files in os.walk(download_dir):
-            for fname in files:
-                fpath = os.path.join(root, fname)
-                arcname = os.path.relpath(fpath, download_dir)
-                zf.write(fpath, arcname)
-    zip_bytes = buf.getvalue()
+    dest = os.path.join(
+        settings.uploads_dir,
+        f"roboflow_{dataset_id}_{req.project_id}_v{req.version}",
+    )
 
     existing = await db.execute(
         select(Image.file_hash).where(Image.dataset_id == dataset_id)
     )
     existing_hashes = {row[0] for row in existing if row[0]}
 
-    from app.services.import_service import import_dataset_zip
-    try:
-        result = await import_dataset_zip(db, dataset_id, zip_bytes, existing_hashes, force_format="coco")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"가져오기 실패: {e}")
+    task_id = str(uuid.uuid4())
+    _task_store[task_id] = {"status": "pending", "result": None, "error": None}
 
-    return result
+    req_copy = req.model_copy()  # BackgroundTasks에 안전하게 전달
+
+    async def _run():
+        _task_store[task_id]["status"] = "running"
+        bg_session = await shard_router.get_session_for_dataset(dataset_id)
+        try:
+            download_dir = download_dataset(
+                req_copy.api_key, req_copy.workspace,
+                req_copy.project_id, req_copy.version, dest,
+            )
+            # 다운로드 디렉토리를 메모리 ZIP으로 묶어 import_service 처리
+            import zipfile as _zf
+            buf = _io.BytesIO()
+            with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as zf:
+                for root, _, files in os.walk(download_dir):
+                    for fname in files:
+                        fpath = os.path.join(root, fname)
+                        arcname = os.path.relpath(fpath, download_dir)
+                        zf.write(fpath, arcname)
+            zip_bytes = buf.getvalue()
+
+            result = await import_dataset_zip(
+                bg_session, dataset_id, zip_bytes, existing_hashes,
+                force_format="coco",
+            )
+            await bg_session.commit()
+            _task_store[task_id] = {"status": "done", "result": result, "error": None}
+        except Exception as e:
+            await bg_session.rollback()
+            _task_store[task_id] = {"status": "error", "result": None, "error": str(e)}
+        finally:
+            await bg_session.close()
+
+    background_tasks.add_task(_run)
+    return {"task_id": task_id, "status": "pending"}

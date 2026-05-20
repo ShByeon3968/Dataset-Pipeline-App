@@ -136,3 +136,92 @@ export interface LabelError {
   confidence: number
   detail: Record<string, number | string> | null
 }
+
+// ── Versioning & Lineage ──────────────────────────────────────
+
+export interface ClassDistItem {
+  name: string
+  count: number
+}
+
+export interface DatasetVersion {
+  id: number
+  dataset_id: number
+  version_name: string
+  description: string
+  created_by: string
+  created_at: string
+  parent_version_id: number | null
+  branch_name: string
+  image_count: number
+  annotation_count: number
+  class_count: number
+  added_images: number
+  deleted_images: number
+  modified_labels: number
+  class_distribution: ClassDistItem[]
+  image_ids_hash: string
+  tags: string
+}
+
+export interface DatasetVersionCreate {
+  version_name: string
+  description?: string
+  created_by?: string
+  branch_name?: string
+  parent_version_id?: number | null
+  tags?: string
+}
+
+export interface ModelVersion {
+  id: number
+  name: string
+  description: string
+  framework: string
+  trained_at: string | null
+  created_at: string
+  created_by: string
+}
+
+export interface ModelVersionCreate {
+  name: string
+  description?: string
+  framework?: string
+  trained_at?: string | null
+  created_by?: string
+}
+
+export interface ModelDatasetLink {
+  id: number
+  model_version_id: number
+  dataset_version_id: number
+  dataset_id: number
+  linked_at: string
+  linked_by: string
+  note: string
+  is_active: boolean
+}
+
+export interface LineageNode {
+  id: number
+  type: 'dataset_version' | 'model_version'
+  label: string
+  dataset_id?: number
+  version_name?: string
+  branch_name?: string
+  framework?: string
+  created_at: string
+}
+
+export interface LineageEdge {
+  source: number
+  source_type: string
+  target: number
+  target_type: string
+  label: string
+}
+
+export interface LineageGraph {
+  nodes: LineageNode[]
+  edges: LineageEdge[]
+}

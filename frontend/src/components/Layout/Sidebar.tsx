@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import {
-  Upload, Tag, BarChart2, Scissors, GitMerge, Download, Home, Target,
+  Upload, Tag, BarChart2, Scissors, GitMerge, Download, Home, Target, GitBranch,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -12,6 +12,7 @@ const navItems = [
   { to: '/refinement', icon: Scissors, label: '4. 정제' },
   { to: '/ontology', icon: GitMerge, label: '5. 온톨로지' },
   { to: '/export', icon: Download, label: '6. 내보내기' },
+  { to: '/versioning', icon: GitBranch, label: '7. 버저닝' },
 ]
 
 export default function Sidebar() {

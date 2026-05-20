@@ -22,56 +22,50 @@ async def get_class_distribution(db: AsyncSession, dataset_id: int) -> list[dict
 
 
 async def get_bbox_stats(db: AsyncSession, dataset_id: int) -> dict:
-    """바운딩 박스 크기 통계"""
+    from sqlalchemy import func as F
+
     stmt = (
         select(
-            Annotation.bbox_w,
-            Annotation.bbox_h,
-            Image.width.label("img_w"),
-            Image.height.label("img_h"),
+            F.count(Annotation.id).label("cnt"),
+            F.min(Annotation.bbox_w).label("w_min"),
+            F.max(Annotation.bbox_w).label("w_max"),
+            F.avg(Annotation.bbox_w).label("w_avg"),
+            F.stddev(Annotation.bbox_w).label("w_std"),
+            F.percentile_cont(0.5).within_group(Annotation.bbox_w).label("w_med"),
+            F.min(Annotation.bbox_h).label("h_min"),
+            F.max(Annotation.bbox_h).label("h_max"),
+            F.avg(Annotation.bbox_h).label("h_avg"),
+            F.stddev(Annotation.bbox_h).label("h_std"),
+            F.percentile_cont(0.5).within_group(Annotation.bbox_h).label("h_med"),
+            F.min(Annotation.bbox_w * Annotation.bbox_h).label("a_min"),
+            F.max(Annotation.bbox_w * Annotation.bbox_h).label("a_max"),
+            F.avg(Annotation.bbox_w * Annotation.bbox_h).label("a_avg"),
+            F.stddev(Annotation.bbox_w * Annotation.bbox_h).label("a_std"),
+            F.percentile_cont(0.5).within_group(
+                Annotation.bbox_w * Annotation.bbox_h
+            ).label("a_med"),
         )
         .join(Image, Annotation.image_id == Image.id)
         .where(
             Image.dataset_id == dataset_id,
             Annotation.annotation_type == "bbox",
             Annotation.bbox_w.isnot(None),
+            Annotation.bbox_h.isnot(None),
         )
     )
-    result = await db.execute(stmt)
-    rows = result.all()
-    if not rows:
-        return {"count": 0, "width": [], "height": [], "area": []}
+    row = (await db.execute(stmt)).one()
 
-    widths, heights, areas = [], [], []
-    for row in rows:
-        if row.img_w and row.img_h:
-            w_px = row.bbox_w * row.img_w
-            h_px = row.bbox_h * row.img_h
-        else:
-            w_px = row.bbox_w
-            h_px = row.bbox_h
-        widths.append(round(w_px, 2))
-        heights.append(round(h_px, 2))
-        areas.append(round(w_px * h_px, 2))
+    if not row.cnt:
+        return {"count": 0, "width_stats": {}, "height_stats": {}, "area_stats": {}}
 
-    def _stats(vals: list[float]) -> dict:
-        import statistics
-        return {
-            "min": min(vals),
-            "max": max(vals),
-            "mean": round(statistics.mean(vals), 2),
-            "median": round(statistics.median(vals), 2),
-            "std": round(statistics.stdev(vals), 2) if len(vals) > 1 else 0,
-        }
+    def _fmt(v):
+        return round(float(v), 2) if v is not None else 0.0
 
     return {
-        "count": len(rows),
-        "width": widths,
-        "height": heights,
-        "area": areas,
-        "width_stats": _stats(widths),
-        "height_stats": _stats(heights),
-        "area_stats": _stats(areas),
+        "count": row.cnt,
+        "width_stats":  {"min": _fmt(row.w_min), "max": _fmt(row.w_max), "mean": _fmt(row.w_avg), "median": _fmt(row.w_med), "std": _fmt(row.w_std)},
+        "height_stats": {"min": _fmt(row.h_min), "max": _fmt(row.h_max), "mean": _fmt(row.h_avg), "median": _fmt(row.h_med), "std": _fmt(row.h_std)},
+        "area_stats":   {"min": _fmt(row.a_min), "max": _fmt(row.a_max), "mean": _fmt(row.a_avg), "median": _fmt(row.a_med), "std": _fmt(row.a_std)},
     }
 
 
