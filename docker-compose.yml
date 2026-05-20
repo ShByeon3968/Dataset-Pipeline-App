@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: dataset_pipeline_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-dataset_pipeline}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI 백엔드 ──────────────────────────────────────────
+  backend:
+    build: ./backend
+    container_name: dataset_pipeline_backend
+    env_file: ./backend/.env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+    volumes:
+      - ./backend/data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # ── React 프론트엔드 ────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    container_name: dataset_pipeline_frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
