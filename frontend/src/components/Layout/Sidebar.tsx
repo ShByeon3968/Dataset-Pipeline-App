@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import {
-  Upload, Tag, BarChart2, Scissors, GitMerge, Download, Home, Target, GitBranch,
+  Upload, Tag, BarChart2, Scissors, GitMerge, Download, Home, Target, GitBranch, Bot,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -8,11 +8,12 @@ const navItems = [
   { to: '/', icon: Home, label: '홈', exact: true },
   { to: '/upload', icon: Upload, label: '1. 업로드' },
   { to: '/labeling', icon: Tag, label: '2. 레이블링' },
-  { to: '/analysis', icon: BarChart2, label: '3. 분석' },
-  { to: '/refinement', icon: Scissors, label: '4. 정제' },
-  { to: '/ontology', icon: GitMerge, label: '5. 온톨로지' },
-  { to: '/export', icon: Download, label: '6. 내보내기' },
-  { to: '/versioning', icon: GitBranch, label: '7. 버저닝' },
+  { to: '/auto-label', icon: Bot, label: '3. AI 자동 레이블링' },
+  { to: '/analysis', icon: BarChart2, label: '4. 분석' },
+  { to: '/refinement', icon: Scissors, label: '5. 정제' },
+  { to: '/ontology', icon: GitMerge, label: '6. 온톨로지' },
+  { to: '/export', icon: Download, label: '7. 내보내기' },
+  { to: '/versioning', icon: GitBranch, label: '8. 버저닝' },
 ]
 
 export default function Sidebar() {

@@ -8,6 +8,7 @@ import Refinement from './pages/Refinement'
 import Ontology from './pages/Ontology'
 import Export from './pages/Export'
 import Versioning from './pages/Versioning'
+import AutoLabel from './pages/AutoLabel'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route index element={<Home />} />
           <Route path="upload" element={<Upload />} />
           <Route path="labeling" element={<Labeling />} />
+          <Route path="auto-label" element={<AutoLabel />} />
           <Route path="analysis" element={<Analysis />} />
           <Route path="refinement" element={<Refinement />} />
           <Route path="ontology" element={<Ontology />} />

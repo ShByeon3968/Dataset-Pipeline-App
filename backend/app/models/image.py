@@ -14,9 +14,9 @@ class Image(Base):
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
     format: Mapped[str | None] = mapped_column(String(20))
-    file_hash: Mapped[str | None] = mapped_column(String(64), index=True)   # MD5
-    phash: Mapped[str | None] = mapped_column(String(64))                    # 퍼셉추얼 해시
+    file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    phash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    dataset = relationship("Dataset", back_populates="images")
-    annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan", lazy="selectin")
+    dataset = relationship("Dataset", back_populates="images", lazy="noload")
+    annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan", lazy="noload")

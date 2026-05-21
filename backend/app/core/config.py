@@ -1,6 +1,3 @@
-"""
-애플리케이션 설정 관리 (pydantic-settings)
-"""
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
@@ -13,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     # App
-    app_name: str = "객체 탐지 데이터셋 관리 솔루션"
+    app_name: str = "Dataset Management Solution"
     app_version: str = "1.0.0"
     debug: bool = False
 
@@ -33,7 +30,6 @@ class Settings(BaseSettings):
 
     @property
     def sync_database_url(self) -> str:
-        """Alembic 마이그레이션용 동기 URL"""
         return (
             f"postgresql+psycopg2://{self.db_user}:{self.db_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
@@ -45,7 +41,12 @@ class Settings(BaseSettings):
     embeddings_dir: str = "./data/embeddings"
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://localhost",
+    ]
 
     # Roboflow
     roboflow_api_key: str = ""

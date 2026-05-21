@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Upload, Tag, BarChart2, Scissors, GitMerge, Download, Plus } from 'lucide-react'
+import { Upload, Tag, BarChart2, Scissors, GitMerge, Download, Plus, AlertCircle, RefreshCw } from 'lucide-react'
 import { datasetsApi } from '../api/datasets'
 import { useAppStore } from '../store'
 
@@ -14,12 +14,17 @@ const steps = [
 ]
 
 export default function Home() {
-  const { data, isLoading } = useQuery({ queryKey: ['datasets'], queryFn: datasetsApi.list })
+  const { data, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['datasets'],
+    queryFn: datasetsApi.list,
+    retry: 1,
+    retryDelay: 2000,
+  })
   const { setSelectedDataset } = useAppStore()
 
   return (
     <div>
-      <h1 className="page-header">🎯 객체 탐지 데이터셋 관리 솔루션</h1>
+      <h1 className="page-header">객체 탐지 데이터셋 관리 솔루션</h1>
       <p className="page-subtitle">ML 엔지니어를 위한 원스톱 데이터셋 구축·분석·정제 도구</p>
 
       {/* Steps */}
@@ -38,17 +43,61 @@ export default function Home() {
       {/* Dataset list */}
       <div className="card p-5">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-bold text-lg">📂 데이터셋 목록</h2>
-          <Link to="/upload" className="btn-primary flex items-center gap-1 text-sm">
-            <Plus className="w-4 h-4" /> 새 데이터셋
-          </Link>
+          <h2 className="font-bold text-lg">데이터셋 목록</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => refetch()}
+              className="p-1.5 rounded hover:bg-gray-100 text-gray-500"
+              title="새로고침"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            <Link to="/upload" className="btn-primary flex items-center gap-1 text-sm">
+              <Plus className="w-4 h-4" /> 새 데이터셋
+            </Link>
+          </div>
         </div>
-        {isLoading && <p className="text-sm text-gray-500">불러오는 중...</p>}
-        {!isLoading && (!data?.items.length) && (
+
+        {/* Loading */}
+        {isLoading && (
+          <div className="space-y-3 py-2">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="animate-pulse flex items-center justify-between py-3">
+                <div className="space-y-2">
+                  <div className="h-4 bg-gray-200 rounded w-40" />
+                  <div className="h-3 bg-gray-100 rounded w-56" />
+                </div>
+                <div className="h-8 bg-gray-200 rounded w-16" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Error */}
+        {isError && (
+          <div className="flex flex-col items-center py-8 gap-3">
+            <AlertCircle className="w-8 h-8 text-red-400" />
+            <p className="text-sm text-red-600 font-medium">데이터셋을 불러오지 못했습니다</p>
+            <p className="text-xs text-gray-400 text-center max-w-sm">
+              {(error as Error)?.message || '백엔드 서버가 실행 중인지 확인하세요.'}
+            </p>
+            <button
+              onClick={() => refetch()}
+              className="btn-secondary text-sm flex items-center gap-1 mt-1"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> 다시 시도
+            </button>
+          </div>
+        )}
+
+        {/* Empty */}
+        {!isLoading && !isError && !data?.items.length && (
           <p className="text-sm text-gray-500 text-center py-8">
             데이터셋이 없습니다. 업로드 페이지에서 시작하세요.
           </p>
         )}
+
+        {/* List */}
         <div className="divide-y divide-gray-100">
           {data?.items.map(ds => (
             <div key={ds.id} className="py-3 flex items-center justify-between">
