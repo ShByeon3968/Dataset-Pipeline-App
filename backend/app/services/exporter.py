@@ -1,13 +1,14 @@
 """
-데이터셋 내보내기 서비스 — COCO JSON / YOLO / Pascal VOC
+Dataset export service — COCO JSON / YOLO / Pascal VOC
+Each format includes a build_manifest.json in the ZIP.
 """
 import json
 import os
 import zipfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.models import Image, Annotation, Class, Dataset
 from app.core.config import get_settings
 from app.services.file_handler import resolve_filepath
@@ -15,8 +16,69 @@ from app.services.file_handler import resolve_filepath
 settings = get_settings()
 
 
+# ---------------------------------------------------------------------------
+# Manifest builder
+# ---------------------------------------------------------------------------
+
+async def _build_manifest(
+    db: AsyncSession,
+    dataset: Dataset,
+    classes: list,
+    images: list,
+    export_format: str,
+) -> dict:
+    """
+    Build a build_manifest.json dict from the current dataset state.
+
+    Fields derived from DB:
+      dataset_name, export_format, exported_at,
+      canonical_classes, statistics (image/annotation counts per class)
+
+    Fields not tracked by this pipeline (kept for schema compatibility):
+      source_datasets, sampling_policy, splits
+    """
+    # Annotation counts per class
+    rows = (
+        await db.execute(
+            select(Annotation.class_id, func.count(Annotation.id))
+            .join(Image, Annotation.image_id == Image.id)
+            .where(Image.dataset_id == dataset.id)
+            .group_by(Annotation.class_id)
+        )
+    ).all()
+
+    class_id_to_name = {cls.id: cls.name for cls in classes}
+    annotation_counts_by_class = {
+        class_id_to_name[r[0]]: r[1]
+        for r in rows
+        if r[0] in class_id_to_name
+    }
+    total_annotations = sum(annotation_counts_by_class.values())
+
+    return {
+        "dataset_name": dataset.name,
+        "export_format": export_format,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "canonical_classes": sorted(cls.name for cls in classes),
+        "statistics": {
+            "num_images": len(images),
+            "num_annotations": total_annotations,
+            "annotation_counts_by_class": annotation_counts_by_class,
+        },
+        # Fields below are not tracked by this pipeline.
+        # Populate manually or via an external build process if needed.
+        "source_datasets": [],
+        "sampling_policy": None,
+        "splits": {},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Export functions
+# ---------------------------------------------------------------------------
+
 async def export_coco(db: AsyncSession, dataset_id: int) -> str:
-    """COCO JSON 형식으로 내보내기 → ZIP 파일 경로 반환"""
+    """Export as COCO JSON format -> returns ZIP file path."""
     dataset = await db.get(Dataset, dataset_id)
     images = (await db.execute(select(Image).where(Image.dataset_id == dataset_id))).scalars().all()
     classes = (await db.execute(select(Class).where(Class.dataset_id == dataset_id))).scalars().all()
@@ -64,13 +126,24 @@ async def export_coco(db: AsyncSession, dataset_id: int) -> str:
             })
             ann_id += 1
 
-    return _make_zip(dataset_id, "coco", {"annotations.json": json.dumps(coco, ensure_ascii=False, indent=2)}, images)
+    manifest = await _build_manifest(db, dataset, list(classes), list(images), "coco")
+
+    return _make_zip(
+        dataset_id,
+        "coco",
+        {
+            "annotations.json": json.dumps(coco, ensure_ascii=False, indent=2),
+            "build_manifest.json": json.dumps(manifest, ensure_ascii=False, indent=2),
+        },
+        images,
+    )
 
 
 async def export_yolo(db: AsyncSession, dataset_id: int) -> str:
-    """YOLO 형식으로 내보내기 → ZIP 파일 경로 반환"""
+    """Export as YOLO format -> returns ZIP file path."""
     classes = (await db.execute(select(Class).where(Class.dataset_id == dataset_id))).scalars().all()
     images = (await db.execute(select(Image).where(Image.dataset_id == dataset_id))).scalars().all()
+    dataset = await db.get(Dataset, dataset_id)
     class_id_to_idx = {cls.id: i for i, cls in enumerate(classes)}
 
     label_files: dict[str, str] = {}
@@ -90,22 +163,22 @@ async def export_yolo(db: AsyncSession, dataset_id: int) -> str:
             lines.append(f"{idx} {cx:.6f} {cy:.6f} {ann.bbox_w:.6f} {ann.bbox_h:.6f}")
         label_files[f"labels/{Path(img.filename).stem}.txt"] = "\n".join(lines)
 
+    manifest = await _build_manifest(db, dataset, list(classes), list(images), "yolo")
+    label_files["build_manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2)
+
     return _make_zip(dataset_id, "yolo", label_files, images)
 
 
 async def export_pascal_voc(db: AsyncSession, dataset_id: int) -> str:
-    """Pascal VOC XML 형식으로 내보내기 → ZIP 파일 경로 반환"""
+    """Export as Pascal VOC XML format -> returns ZIP file path."""
     try:
         from lxml import etree
     except ImportError:
         import xml.etree.ElementTree as etree
 
-    classes = {
-        cls.id: cls.name
-        for cls in (
-            await db.execute(select(Class).where(Class.dataset_id == dataset_id))
-        ).scalars().all()
-    }
+    dataset = await db.get(Dataset, dataset_id)
+    classes_result = (await db.execute(select(Class).where(Class.dataset_id == dataset_id))).scalars().all()
+    classes = {cls.id: cls.name for cls in classes_result}
     images = (await db.execute(select(Image).where(Image.dataset_id == dataset_id))).scalars().all()
 
     xml_files: dict[str, str] = {}
@@ -138,11 +211,18 @@ async def export_pascal_voc(db: AsyncSession, dataset_id: int) -> str:
         xml_str = etree.tostring(root, pretty_print=True, encoding="unicode")
         xml_files[f"annotations/{Path(img.filename).stem}.xml"] = xml_str
 
+    manifest = await _build_manifest(db, dataset, list(classes_result), list(images), "pascal_voc")
+    xml_files["build_manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2)
+
     return _make_zip(dataset_id, "voc", xml_files, images)
 
 
+# ---------------------------------------------------------------------------
+# ZIP helper
+# ---------------------------------------------------------------------------
+
 def _make_zip(dataset_id: int, fmt: str, text_files: dict, images: list) -> str:
-    """텍스트 파일들과 이미지들을 ZIP으로 묶기"""
+    """Bundle text files and images into a ZIP, return the ZIP path."""
     os.makedirs(settings.exports_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_path = os.path.join(settings.exports_dir, f"dataset_{dataset_id}_{fmt}_{timestamp}.zip")
