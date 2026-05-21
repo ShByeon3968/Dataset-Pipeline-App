@@ -29,7 +29,11 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-dataset_pipeline}
     volumes:
-      - ./backend/data:/app/data
+      - backend_uploads:/app/data/uploads
+      - backend_exports:/app/data/exports
+      - backend_embeddings:/app/data/embeddings
+      - ./backend/data/models:/app/data/models
+      - ./backend/app:/app/app
     ports:
       - "8000:8000"
     depends_on:
@@ -49,3 +53,6 @@ services:
 
 volumes:
   postgres_data:
+  backend_uploads:
+  backend_exports:
+  backend_embeddings:

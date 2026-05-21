@@ -3,45 +3,40 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 
-# 설정
+# Config
 pydantic-settings>=2.3.0
 
-# 데이터베이스 (PostgreSQL async)
+# Database (PostgreSQL async)
 sqlalchemy>=2.0.31
 asyncpg>=0.29.0
-psycopg2-binary>=2.9.9   # Alembic 마이그레이션용 동기 드라이버
+psycopg2-binary>=2.9.9
 
-# DB 마이그레이션
+# DB migrations
 alembic>=1.13.0
 
-# 이미지 처리
+# Image processing
 Pillow>=10.3.0
 opencv-python-headless>=4.9.0
 
-# 해시
+# Hash
 imagehash>=4.3.1
 
-# 내보내기
+# Export
 lxml>=5.2.0
 
-# 임포트 (YOLO data.yaml 파싱)
+# Import (YOLO data.yaml parsing)
 pyyaml>=6.0
 
-# Roboflow 연동 (선택)
+# Roboflow integration
 roboflow>=1.1.0
 
-# 환경변수
+# Env vars
 python-dotenv>=1.0.1
 
-# 임베딩 (선택 — 무거우므로 주석 처리 후 필요 시 설치)
-# torch>=2.3.0
-# torchvision>=0.18.0
-# open-clip-torch>=2.24.0
-# umap-learn>=0.5.6
-# scikit-learn>=1.4.0
-
-
-# AI Auto-labeling (YOLOv5n ONNX)
-onnxruntime>=1.18.0
+# AI Auto-labeling (YOLO-World — open-vocabulary detection)
+# YOLO-World uses CLIP internally for text encoding.
+# Pre-install at build time to prevent runtime auto-install failure (requires git).
+ultralytics>=8.3.0
 numpy>=1.26.0
 scikit-learn>=1.4.0
+git+https://github.com/ultralytics/CLIP.git
