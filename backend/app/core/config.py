@@ -42,20 +42,21 @@ class Settings(BaseSettings):
     exports_dir: str = "./data/exports"
     embeddings_dir: str = "./data/embeddings"
 
-    # CORS - str 필드로 받아서 property에서 list로 변환
-    # pydantic-settings v2 는 list[str] 을 env에서 읽을 때 JSON 파싱을 먼저 시도하므로
-    # 쉼표 구분 문자열을 받으려면 str 필드 + property 방식을 사용해야 합니다.
-    #
-    # 예) CORS_ORIGINS=http://10.101.0.23:8080,http://localhost:8080
-    cors_origins_raw: str = (
-        "http://localhost:5173,http://localhost:3000,"
-        "http://localhost:8080,http://localhost"
+    # CORS - 쉼표 구분 문자열로 설정
+    # 예) CORS_ORIGINS=http://192.168.1.10:8080,http://192.168.1.20:8080
+    cors_origins: str = (
+        "http://localhost:5173,"
+        "http://localhost:3000,"
+        "http://localhost:8080,"
+        "http://localhost"
     )
+    cors_origins_raw: str | None = None
 
     @property
-    def cors_origins(self) -> list[str]:
-        """쉼표 구분 또는 JSON 배열 형식 모두 지원."""
-        v = self.cors_origins_raw.strip()
+    def cors_origins_list(self) -> list[str]:
+        """CORS_ORIGINS 또는 CORS_ORIGINS_RAW 환경변수를 list[str] 로 반환."""
+        v = self.cors_origins_raw or self.cors_origins
+        v = v.strip()
         if not v:
             return ["*"]
         if v.startswith("["):
