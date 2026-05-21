@@ -40,3 +40,7 @@ ultralytics>=8.3.0
 numpy>=1.26.0
 scikit-learn>=1.4.0
 git+https://github.com/ultralytics/CLIP.git
+
+# Embedding visualization
+# UMAP 2D projection (GET /analysis/embeddings?method=umap)
+umap-learn>=0.5.6
