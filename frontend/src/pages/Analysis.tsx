@@ -4,6 +4,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from 'recharts'
+import { Sliders, CheckCircle2 } from 'lucide-react'
 import { useAppStore } from '../store'
 import { analysisApi, type EmbeddingPoint } from '../api/analysis'
 
@@ -133,8 +134,32 @@ function EmbeddingScatter({ points }: { points: EmbeddingPoint[] }) {
 
 // ── 메인 페이지 ──────────────────────────────────────────────────────
 export default function AnalysisPage() {
-  const { selectedDataset } = useAppStore()
+  const { selectedDataset, splitRatios, setSplitRatios } = useAppStore()
   const [showEmbedding, setShowEmbedding] = useState(false)
+  const [localTrain, setLocalTrain] = useState(splitRatios.train)
+  const [localVal, setLocalVal] = useState(splitRatios.val)
+  const localTest = Math.max(0, 100 - localTrain - localVal)
+  const [saved, setSaved] = useState(false)
+
+  const handleTrainChange = (v: number) => {
+    const clamped = Math.min(v, 100 - localVal - 5)
+    setLocalTrain(Math.max(5, clamped))
+  }
+  const handleValChange = (v: number) => {
+    const clamped = Math.min(v, 100 - localTrain - 5)
+    setLocalVal(Math.max(5, clamped))
+  }
+  const handleSave = () => {
+    setSplitRatios({ train: localTrain, val: localVal, test: localTest })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const { data: splitStatsData } = useQuery({
+    queryKey: ['split-stats', selectedDataset?.id],
+    queryFn: () => analysisApi.splitStats(selectedDataset!.id),
+    enabled: !!selectedDataset,
+  })
 
   const { data: summary } = useQuery({
     queryKey: ['analysis-summary', selectedDataset?.id],
@@ -225,6 +250,147 @@ export default function AnalysisPage() {
             </ResponsiveContainer>
           </div>
         )}
+      </div>
+
+      {/* Split Balance */}
+      <div className="card p-5 mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Sliders className="w-4 h-4 text-blue-500" />
+          <h2 className="font-semibold">Split Balance</h2>
+          <span className="text-xs text-gray-400 ml-1">(applies to images without a split label)</span>
+        </div>
+
+        {/* Current split status bar */}
+        {splitStatsData && splitStatsData.total > 0 && (
+          <div className="mb-5">
+            <div className="flex justify-between text-xs text-gray-500 mb-1">
+              <span>Current split status</span>
+              <span className="text-gray-400">{splitStatsData.total} images total</span>
+            </div>
+            <div className="flex h-5 rounded-full overflow-hidden w-full">
+              {[
+                { key: 'train', color: '#3B82F6', label: 'Train' },
+                { key: 'val', color: '#F59E0B', label: 'Val' },
+                { key: 'test', color: '#10B981', label: 'Test' },
+                { key: 'unsplit', color: '#E5E7EB', label: 'Unsplit' },
+              ].map(({ key, color }) => {
+                const count = splitStatsData[key as keyof typeof splitStatsData] as number
+                const pct = (count / splitStatsData.total) * 100
+                return pct > 0 ? (
+                  <div key={key} style={{ width: `${pct}%`, background: color }} />
+                ) : null
+              })}
+            </div>
+            <div className="flex flex-wrap gap-3 mt-2">
+              {[
+                { key: 'train', color: '#3B82F6', label: 'Train' },
+                { key: 'val', color: '#F59E0B', label: 'Val' },
+                { key: 'test', color: '#10B981', label: 'Test' },
+                { key: 'unsplit', color: '#E5E7EB', label: 'Unsplit', text: '#6B7280' },
+              ].map(({ key, color, label, text }) => {
+                const count = splitStatsData[key as keyof typeof splitStatsData] as number
+                return count > 0 ? (
+                  <div key={key} className="flex items-center gap-1.5 text-xs text-gray-600">
+                    <div className="w-3 h-3 rounded-sm border border-gray-200" style={{ background: color }} />
+                    <span style={{ color: text }}>{label}</span>
+                    <span className="font-medium" style={{ color: text }}>{count}</span>
+                  </div>
+                ) : null
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Sliders */}
+        <div className="space-y-4">
+          {/* Train */}
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="font-medium text-blue-600">Train</span>
+              <span className="font-bold text-blue-600">{localTrain}%</span>
+            </div>
+            <input
+              type="range" min={5} max={90} step={1}
+              value={localTrain}
+              onChange={(e) => handleTrainChange(Number(e.target.value))}
+              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+              style={{ accentColor: '#3B82F6' }}
+            />
+          </div>
+
+          {/* Val */}
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="font-medium text-amber-500">Val</span>
+              <span className="font-bold text-amber-500">{localVal}%</span>
+            </div>
+            <input
+              type="range" min={5} max={Math.max(5, 95 - localTrain)} step={1}
+              value={localVal}
+              onChange={(e) => handleValChange(Number(e.target.value))}
+              className="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-20"
+              style={{ accentColor: '#F59E0B' }}
+            />
+          </div>
+
+          {/* Test (derived) */}
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="font-medium text-emerald-500">Test</span>
+              <span className="font-bold text-emerald-500">{localTest}%</span>
+            </div>
+            <div className="w-full h-2 rounded-lg bg-gray-100 relative">
+              <div
+                className="h-2 rounded-lg"
+                style={{ width: `${localTest}%`, background: '#10B981' }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-0.5">Auto-computed: 100 - Train - Val</p>
+          </div>
+        </div>
+
+        {/* Preview bar */}
+        <div className="mt-5">
+          <p className="text-xs text-gray-500 mb-1">Preview (unsplit images will be distributed as:)</p>
+          <div className="flex h-6 rounded-lg overflow-hidden w-full text-xs font-semibold">
+            <div className="flex items-center justify-center text-white"
+              style={{ width: `${localTrain}%`, background: '#3B82F6' }}>
+              {localTrain >= 10 ? `${localTrain}%` : ''}
+            </div>
+            <div className="flex items-center justify-center text-white"
+              style={{ width: `${localVal}%`, background: '#F59E0B' }}>
+              {localVal >= 10 ? `${localVal}%` : ''}
+            </div>
+            <div className="flex items-center justify-center text-white"
+              style={{ width: `${localTest}%`, background: '#10B981' }}>
+              {localTest >= 10 ? `${localTest}%` : ''}
+            </div>
+          </div>
+          <div className="flex gap-4 mt-2 text-xs text-gray-500">
+            <span className="text-blue-600">Train {localTrain}%</span>
+            <span className="text-amber-500">Val {localVal}%</span>
+            <span className="text-emerald-500">Test {localTest}%</span>
+          </div>
+        </div>
+
+        {/* Save button */}
+        <div className="flex items-center gap-3 mt-4">
+          <button
+            onClick={handleSave}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors font-medium"
+          >
+            Save ratios
+          </button>
+          {saved && (
+            <span className="flex items-center gap-1 text-sm text-green-600">
+              <CheckCircle2 className="w-4 h-4" />
+              Saved — ratios will be used on export
+            </span>
+          )}
+          <span className="text-xs text-gray-400 ml-auto">
+            Images already tagged train/val/test are not affected
+          </span>
+        </div>
       </div>
 
       {/* BBox 통계 */}

@@ -15,6 +15,14 @@ export interface EmbeddingResult {
   note?: string
 }
 
+export interface SplitStats {
+  train: number
+  val: number
+  test: number
+  unsplit: number
+  total: number
+}
+
 export const analysisApi = {
   summary: (datasetId: number) =>
     client.get<DatasetSummary>(`/datasets/${datasetId}/analysis/summary`).then(r => r.data),
@@ -27,6 +35,9 @@ export const analysisApi = {
 
   embeddings: (datasetId: number) =>
     client.get<EmbeddingResult>(`/datasets/${datasetId}/analysis/embeddings`).then(r => r.data),
+
+  splitStats: (datasetId: number) =>
+    client.get<SplitStats>(`/datasets/${datasetId}/analysis/split-stats`).then(r => r.data),
 
   analyzeCoco: (file: File) => {
     const formData = new FormData()

@@ -1,7 +1,7 @@
 """
-데이터셋 내보내기 라우터
+Dataset export router
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.sharding.router import get_sharded_db
@@ -22,26 +22,57 @@ FORMAT_MAP = {
 async def export_dataset(
     dataset_id: int,
     format: str,
+    train_ratio: float = Query(default=0.7, ge=0.0, le=1.0, description="Train split ratio (used for images without a split label)"),
+    val_ratio: float = Query(default=0.2, ge=0.0, le=1.0, description="Val split ratio"),
+    test_ratio: float = Query(default=0.1, ge=0.0, le=1.0, description="Test split ratio (remainder after train+val if omitted)"),
     db: AsyncSession = Depends(get_sharded_db),
 ):
+    """
+    Export dataset as ZIP in the specified format.
+
+    - **format**: coco | yolo | voc
+    - **train_ratio / val_ratio / test_ratio**: only applied to images that were
+      imported without a split label (case 2 & 3). Images already tagged
+      train/val/test retain their original split.
+    - Ratios are auto-normalized, so they don't need to sum to exactly 1.
+
+    ZIP structure:
+    ```
+    train/images/...
+    train/_annotations.coco.json  (COCO)
+    train/labels/*.txt            (YOLO)
+    train/annotations/*.xml       (VOC)
+    val/...
+    test/...
+    data.yaml                     (YOLO only)
+    build_manifest.json
+    ```
+    """
     ds = await db.get(Dataset, dataset_id)
     if not ds:
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
+        raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    exporter = FORMAT_MAP.get(format.lower())
+    fmt = format.lower()
+    exporter = FORMAT_MAP.get(fmt)
     if not exporter:
         raise HTTPException(
             status_code=400,
-            detail=f"지원하지 않는 형식: {format}. 사용 가능: coco, yolo, voc",
+            detail=f"Unsupported format: {format}. Available: coco, yolo, voc",
         )
 
     try:
-        zip_path = await exporter(db, dataset_id)
+        zip_path = await exporter(
+            db,
+            dataset_id,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            test_ratio=test_ratio,
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"내보내기 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
     if not os.path.exists(zip_path):
-        raise HTTPException(status_code=500, detail="파일 생성 실패")
+        raise HTTPException(status_code=500, detail="File creation failed.")
 
     filename = os.path.basename(zip_path)
     return FileResponse(

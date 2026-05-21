@@ -5,7 +5,7 @@ import useImage from 'use-image'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { Vector2d } from 'konva/lib/types'
 import toast from 'react-hot-toast'
-import { ChevronLeft, ChevronRight, Plus, Trash2, ChevronsLeft, ChevronsRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Trash2, ChevronsLeft, ChevronsRight, Cpu } from 'lucide-react'
 import { imagesApi } from '../api/images'
 import { annotationsApi } from '../api/annotations'
 import { classesApi } from '../api/classes'
@@ -14,12 +14,23 @@ import type { Annotation } from '../types'
 
 const CANVAS_W = 700
 const CANVAS_H = 500
-const PAGE_SIZE = 10   // 한 번에 불러올 이미지 수
+const PAGE_SIZE = 10
+
+// Auto-label annotation stroke color (orange)
+const AUTO_LABEL_COLOR = '#F97316'
 
 interface BBox { x: number; y: number; w: number; h: number }
 interface SelectedClass { id: number; color: string }
 
-// ── BBox 캔버스 컴포넌트 ──────────────────────────────────────────
+// Returns stroke color and dash pattern based on whether annotation is auto-generated
+function getAnnStyle(ann: Annotation): { stroke: string; dash: number[] | undefined } {
+  if (ann.is_auto_generated) {
+    return { stroke: AUTO_LABEL_COLOR, dash: [6, 3] }
+  }
+  return { stroke: ann.class_color ?? '#FF6B6B', dash: undefined }
+}
+
+// ── BBox Canvas ──────────────────────────────────────────────────
 function BBoxCanvas({
   imageUrl, annotations, selectedClass, onAdd,
 }: {
@@ -83,20 +94,26 @@ function BBoxCanvas({
     >
       <Layer>
         {img && <KonvaImage image={img} width={imgW} height={imgH} />}
-        {annotations.map((ann) =>
-          ann.bbox_x != null ? (
+        {annotations.map((ann) => {
+          if (ann.bbox_x == null) return null
+          const { stroke, dash } = getAnnStyle(ann)
+          const fillColor = ann.is_auto_generated
+            ? `${AUTO_LABEL_COLOR}1A`
+            : `${ann.class_color ?? '#FF6B6B'}22`
+          return (
             <Rect
               key={ann.id}
               x={ann.bbox_x * imgW}
               y={(ann.bbox_y ?? 0) * imgH}
               width={(ann.bbox_w ?? 0) * imgW}
               height={(ann.bbox_h ?? 0) * imgH}
-              stroke={ann.class_color ?? '#FF6B6B'}
-              strokeWidth={2}
-              fill={`${ann.class_color ?? '#FF6B6B'}22`}
+              stroke={stroke}
+              strokeWidth={ann.is_auto_generated ? 1.5 : 2}
+              dash={dash}
+              fill={fillColor}
             />
-          ) : null
-        )}
+          )
+        })}
         {currentRect && (
           <Rect
             x={currentRect.x} y={currentRect.y}
@@ -110,26 +127,23 @@ function BBoxCanvas({
   )
 }
 
-// ── 메인 페이지 ──────────────────────────────────────────────────
+// ── Main Page ────────────────────────────────────────────────────
 export default function LabelingPage() {
   const qc = useQueryClient()
   const { selectedDataset } = useAppStore()
 
-  // globalIndex: 전체 이미지 목록에서의 절대 위치 (0-indexed)
   const [globalIndex, setGlobalIndex] = useState(0)
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
   const [newClassName, setNewClassName] = useState('')
 
-  // 현재 페이지 번호와 페이지 내 로컬 인덱스
   const page = useMemo(() => Math.floor(globalIndex / PAGE_SIZE), [globalIndex])
   const localIndex = useMemo(() => globalIndex % PAGE_SIZE, [globalIndex])
 
-  // 현재 페이지의 이미지 목록 fetch
   const { data: imagesData, isFetching: fetchingImages } = useQuery({
     queryKey: ['images', selectedDataset?.id, page],
     queryFn: () => imagesApi.list(selectedDataset!.id, page * PAGE_SIZE, PAGE_SIZE),
     enabled: !!selectedDataset,
-    placeholderData: (prev) => prev,  // 페이지 전환 시 이전 데이터 유지
+    placeholderData: (prev) => prev,
   })
 
   const { data: classes } = useQuery({
@@ -142,26 +156,27 @@ export default function LabelingPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const currentImage = imagesData?.items[localIndex]
 
-  // 주석 fetch
   const { data: annotations, refetch: refetchAnnotations } = useQuery({
     queryKey: ['annotations', selectedDataset?.id, currentImage?.id],
     queryFn: () => annotationsApi.list(selectedDataset!.id, currentImage!.id),
     enabled: !!selectedDataset && !!currentImage,
   })
 
-  // ── 네비게이션 핸들러 ──────────────────────────────────────────
+  // Annotation counts by type (for summary)
+  const manualCount = annotations?.filter((a) => !a.is_auto_generated).length ?? 0
+  const autoCount = annotations?.filter((a) => a.is_auto_generated).length ?? 0
+
+  // ── Navigation ───────────────────────────────────────────────
   const goPrev = () => setGlobalIndex((i) => Math.max(0, i - 1))
   const goNext = () => setGlobalIndex((i) => Math.min(total - 1, i + 1))
-
   const goFirstPage = () => setGlobalIndex(0)
   const goLastPage = () => setGlobalIndex(Math.max(0, total - 1))
-
   const goToPage = (p: number) => {
     const clamped = Math.max(0, Math.min(totalPages - 1, p))
     setGlobalIndex(clamped * PAGE_SIZE)
   }
 
-  // ── Mutations ─────────────────────────────────────────────────
+  // ── Mutations ────────────────────────────────────────────────
   const addAnn = useMutation({
     mutationFn: (bbox: BBox) =>
       annotationsApi.create(selectedDataset!.id, currentImage!.id, {
@@ -186,7 +201,7 @@ export default function LabelingPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['datasets'] })
       qc.invalidateQueries({ queryKey: ['images', selectedDataset?.id] })
-      toast.success('이미지 삭제 완료')
+      toast.success('Image deleted.')
       setGlobalIndex((i) => Math.max(0, i - 1))
     },
     onError: (e: Error) => toast.error(e.message),
@@ -198,14 +213,14 @@ export default function LabelingPage() {
       qc.invalidateQueries({ queryKey: ['classes', selectedDataset?.id] })
       setSelectedClassId(cls.id)
       setNewClassName('')
-      toast.success(`클래스 '${cls.name}' 생성`)
+      toast.success(`Class '${cls.name}' created.`)
     },
   })
 
   if (!selectedDataset) {
     return (
       <div className="card p-8 text-center text-gray-500">
-        홈 화면에서 데이터셋을 선택하세요.
+        Select a dataset from the home screen.
       </div>
     )
   }
@@ -214,24 +229,39 @@ export default function LabelingPage() {
 
   return (
     <div>
-      <h1 className="page-header">🏷️ 레이블링</h1>
-      <p className="page-subtitle">이미지에 바운딩 박스를 그리고 클래스를 할당합니다.</p>
+      <h1 className="page-header">Labeling</h1>
+      <p className="page-subtitle">Draw bounding boxes and assign classes to images.</p>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 mb-4 text-xs text-gray-500">
+        <div className="flex items-center gap-1.5">
+          <div className="w-6 h-3 rounded border-2 border-blue-400" style={{ background: '#3B82F622' }} />
+          <span>Manual label</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div
+            className="w-6 h-3 rounded"
+            style={{
+              border: `2px dashed ${AUTO_LABEL_COLOR}`,
+              background: `${AUTO_LABEL_COLOR}1A`,
+            }}
+          />
+          <span>Auto label (AI)</span>
+        </div>
+      </div>
 
       <div className="flex gap-6">
-        {/* ── 캔버스 영역 ──────────────────────────────────────── */}
+        {/* ── Canvas area ──────────────────────────────────── */}
         <div className="flex-1">
-          {/* 이미지 네비게이션 */}
           <div className="flex items-center gap-2 mb-3 flex-wrap">
-            {/* 첫 이미지 */}
             <button
               onClick={goFirstPage}
               disabled={globalIndex === 0}
               className="btn-secondary disabled:opacity-40 p-1.5"
-              title="첫 이미지"
+              title="First image"
             >
               <ChevronsLeft className="w-4 h-4" />
             </button>
-            {/* 이전 이미지 */}
             <button
               onClick={goPrev}
               disabled={globalIndex === 0}
@@ -240,12 +270,10 @@ export default function LabelingPage() {
               <ChevronLeft className="w-5 h-5" />
             </button>
 
-            {/* 현재 위치 / 전체 */}
             <span className="text-sm text-gray-600 min-w-[80px] text-center">
               {total > 0 ? globalIndex + 1 : 0} / {total}
             </span>
 
-            {/* 다음 이미지 */}
             <button
               onClick={goNext}
               disabled={globalIndex >= total - 1}
@@ -253,19 +281,17 @@ export default function LabelingPage() {
             >
               <ChevronRight className="w-5 h-5" />
             </button>
-            {/* 마지막 이미지 */}
             <button
               onClick={goLastPage}
               disabled={globalIndex >= total - 1}
               className="btn-secondary disabled:opacity-40 p-1.5"
-              title="마지막 이미지"
+              title="Last image"
             >
               <ChevronsRight className="w-4 h-4" />
             </button>
 
-            {/* 페이지 점프 */}
             <div className="flex items-center gap-1 ml-2 text-xs text-gray-500">
-              <span>페이지</span>
+              <span>Page</span>
               <input
                 type="number"
                 min={1} max={totalPages}
@@ -276,29 +302,25 @@ export default function LabelingPage() {
               <span>/ {totalPages}</span>
             </div>
 
-            {/* 파일명 */}
             <span className="text-xs text-gray-400 ml-2 truncate max-w-[200px]" title={currentImage?.filename}>
-              {fetchingImages ? '불러오는 중...' : (currentImage?.filename ?? '—')}
+              {fetchingImages ? 'Loading...' : (currentImage?.filename ?? '-')}
             </span>
 
-            {/* 이미지 삭제 */}
             {currentImage && (
               <button
                 onClick={() => {
-                  if (confirm(`'${currentImage.filename}' 을(를) 삭제할까요?\n연결된 주석도 함께 삭제됩니다.`))
+                  if (confirm(`Delete '${currentImage.filename}'?\nAll annotations will also be removed.`))
                     deleteImage.mutate()
                 }}
                 disabled={deleteImage.isPending}
                 className="ml-auto flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-500 border border-red-300 rounded-lg hover:bg-red-50 disabled:opacity-40 transition-colors"
-                title="현재 이미지 삭제"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                이미지 삭제
+                Delete image
               </button>
             )}
           </div>
 
-          {/* 캔버스 */}
           {currentImage ? (
             <BBoxCanvas
               imageUrl={imagesApi.getFileUrl(currentImage.dataset_id, currentImage.id)}
@@ -311,16 +333,16 @@ export default function LabelingPage() {
               style={{ width: CANVAS_W, height: CANVAS_H }}
               className="flex items-center justify-center bg-gray-50 border rounded-lg text-gray-400 text-sm"
             >
-              {total === 0 ? '이미지를 먼저 업로드하세요' : '이미지를 불러오는 중...'}
+              {total === 0 ? 'Upload images first.' : 'Loading image...'}
             </div>
           )}
         </div>
 
-        {/* ── 사이드 패널 ──────────────────────────────────────── */}
+        {/* ── Side panel ───────────────────────────────────── */}
         <div className="w-64 shrink-0 space-y-4">
-          {/* 클래스 선택 */}
+          {/* Class selector */}
           <div className="card p-4">
-            <h3 className="font-semibold text-sm mb-3">클래스 선택</h3>
+            <h3 className="font-semibold text-sm mb-3">Class</h3>
             <div className="space-y-1 mb-3 max-h-48 overflow-y-auto">
               {classes?.map((cls) => (
                 <button
@@ -340,18 +362,17 @@ export default function LabelingPage() {
                 </button>
               ))}
               {(!classes || classes.length === 0) && (
-                <p className="text-xs text-gray-400 text-center py-2">클래스 없음</p>
+                <p className="text-xs text-gray-400 text-center py-2">No classes</p>
               )}
             </div>
 
-            {/* 새 클래스 추가 */}
             <div className="flex gap-1">
               <input
                 type="text"
                 value={newClassName}
                 onChange={(e) => setNewClassName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && newClassName.trim() && createClass.mutate()}
-                placeholder="새 클래스명"
+                placeholder="New class name"
                 className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
               <button
@@ -364,35 +385,66 @@ export default function LabelingPage() {
             </div>
           </div>
 
-          {/* 주석 목록 */}
+          {/* Annotation list */}
           <div className="card p-4">
-            <h3 className="font-semibold text-sm mb-3">
-              주석 목록
-              <span className="ml-1 text-gray-400 font-normal">({annotations?.length ?? 0})</span>
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-sm">
+                Annotations
+                <span className="ml-1 text-gray-400 font-normal">({annotations?.length ?? 0})</span>
+              </h3>
+              {autoCount > 0 && (
+                <span className="flex items-center gap-1 text-xs text-orange-500 font-medium">
+                  <Cpu className="w-3 h-3" />
+                  {autoCount} AI
+                </span>
+              )}
+            </div>
             <div className="space-y-1 max-h-64 overflow-y-auto">
-              {annotations?.map((ann) => (
-                <div
-                  key={ann.id}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-50 text-xs group"
-                >
+              {annotations?.map((ann) => {
+                const isAuto = ann.is_auto_generated
+                return (
                   <div
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ background: ann.class_color ?? '#94a3b8' }}
-                  />
-                  <span className="flex-1 truncate text-gray-700">
-                    {ann.class_name ?? '미분류'}
-                  </span>
-                  <button
-                    onClick={() => deleteAnn.mutate(ann.id)}
-                    className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity"
+                    key={ann.id}
+                    className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs group ${
+                      isAuto ? 'bg-orange-50' : 'bg-gray-50'
+                    }`}
                   >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
+                    {/* Color dot */}
+                    <div
+                      className="w-2.5 h-2.5 rounded-full shrink-0 ring-1"
+                      style={{
+                        background: isAuto ? AUTO_LABEL_COLOR : (ann.class_color ?? '#94a3b8'),
+                        ringColor: isAuto ? AUTO_LABEL_COLOR : 'transparent',
+                      }}
+                    />
+
+                    {/* Class name */}
+                    <span className="flex-1 truncate text-gray-700">
+                      {ann.class_name ?? 'Unlabeled'}
+                    </span>
+
+                    {/* AI badge + confidence */}
+                    {isAuto && (
+                      <span className="flex items-center gap-0.5 px-1 py-0.5 rounded text-orange-600 bg-orange-100 font-medium shrink-0">
+                        <Cpu className="w-2.5 h-2.5" />
+                        {ann.confidence != null
+                          ? `${Math.round(ann.confidence * 100)}%`
+                          : 'AI'}
+                      </span>
+                    )}
+
+                    {/* Delete button */}
+                    <button
+                      onClick={() => deleteAnn.mutate(ann.id)}
+                      className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity shrink-0"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )
+              })}
               {(!annotations || annotations.length === 0) && (
-                <p className="text-xs text-gray-400 text-center py-2">주석 없음</p>
+                <p className="text-xs text-gray-400 text-center py-2">No annotations</p>
               )}
             </div>
           </div>

@@ -44,6 +44,8 @@ export interface Annotation {
   bbox_h: number | null
   segmentation: number[][] | null
   annotation_type: 'bbox' | 'polygon'
+  is_auto_generated: boolean
+  confidence: number | null
   created_at: string
   updated_at: string
 }

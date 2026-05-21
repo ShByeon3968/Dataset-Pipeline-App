@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +26,7 @@ from app.routers.versions import router as versions_router
 from app.routers.lineage import model_router as model_versions_router, lineage_router
 from app.routers.auto_label import router as auto_label_router
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -33,6 +35,21 @@ async def lifespan(app: FastAPI):
     ensure_dirs()
     await create_tables()
     await shard_router.initialize()
+
+    # Reset stuck auto-label runs
+    from app.models.auto_label_run import AutoLabelRun
+    from sqlalchemy import update
+    try:
+        async with shard_router.get_meta_session() as session:
+            async with session.begin():
+                await session.execute(
+                    update(AutoLabelRun)
+                    .where(AutoLabelRun.status.in_(["pending", "running"]))
+                    .values(status="failed", error_message="서버가 재시작되었거나 작업이 중단되었습니다.")
+                )
+    except Exception as e:
+        logger.error("Error resetting stuck auto-label runs: %s", e)
+
     yield
     await shard_router.close()
 
@@ -48,7 +65,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

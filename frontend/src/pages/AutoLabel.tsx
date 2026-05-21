@@ -121,7 +121,7 @@ export default function AutoLabel() {
     <div>
       <h1 className="page-header">AI 자동 레이블링</h1>
       <p className="page-subtitle">
-        SAM3 Segment Anything 모델로 텍스트 프롬프트를 기반으로 객체를 세그먼트하고 바운딩 박스를 생성합니다.
+        YOLO-Wolrd 모델로 텍스트 프롬프트를 기반으로 객체를 세그먼트하고 바운딩 박스를 생성합니다.
       </p>
 
       <div className="card mb-6">

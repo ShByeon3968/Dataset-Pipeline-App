@@ -24,7 +24,7 @@ export default function Home() {
 
   return (
     <div>
-      <h1 className="page-header">객체 탐지 데이터셋 관리 솔루션</h1>
+      <h1 className="page-header">데이터셋 관리 파이프라인</h1>
       <p className="page-subtitle">ML 엔지니어를 위한 원스톱 데이터셋 구축·분석·정제 도구</p>
 
       {/* Steps */}

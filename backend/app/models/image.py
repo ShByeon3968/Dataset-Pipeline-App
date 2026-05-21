@@ -16,6 +16,12 @@ class Image(Base):
     format: Mapped[str | None] = mapped_column(String(20))
     file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     phash: Mapped[str | None] = mapped_column(String(64))
+    # split: "train" | "val" | "test" | None
+    # Set on import when the ZIP contains split directories (train/val/test).
+    # None means the image has not been assigned to a split yet.
+    # Export uses this to build per-split folder structure; images with None
+    # are assigned to splits proportionally at export time.
+    split: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     dataset = relationship("Dataset", back_populates="images", lazy="noload")

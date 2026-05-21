@@ -1,34 +1,46 @@
 """
-파일 업로드 · 저장 · 해시 처리 서비스
+파일 업로드, 저장, 해시 처리 서비스
 
 경로 정책
 ---------
 DB의 Image.filepath 컬럼에는 uploads_dir 기준 상대경로를 저장합니다.
 예) "{dataset_id}/{hash_stem}.jpg"
 
-실제 파일에 접근할 때는 resolve_filepath()를 통해 절대경로를 얻습니다.
-하위 호환: 기존에 절대경로로 저장된 레코드는 그대로 사용됩니다.
+실제 파일에 접근할 때는 resolve_filepath() 를 통해 절대경로를 얻습니다.
+
+NAS 연동 방법
+-------------
+docker-compose.yml 의 volumes 에서 NAS 마운트 경로를 /app/data/uploads 에
+bind mount 하면 uploads_dir 기본값 그대로 NAS에 저장됩니다.
+코드 변경 없이 docker-compose.yml / .env 설정만으로 NAS 전환이 가능합니다.
 """
-import os
+from __future__ import annotations
+
 import hashlib
-import zipfile
+import io
+import logging
+import os
 import shutil
+import zipfile
 from pathlib import Path
+
 from PIL import Image as PILImage
+
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".tif", ".webp"}
 
 
-# ── 경로 유틸리티 ─────────────────────────────────────────────────
+# 경로 유틸
 
 def resolve_filepath(path: str) -> str:
     """
-    DB에 저장된 경로를 절대경로로 변환.
-    - 절대경로(/)로 시작하면 그대로 반환 (하위 호환)
-    - 상대경로면 uploads_dir과 조합해 절대경로 반환
+    DB에 저장된 상대경로를 절대경로로 변환.
+    - 절대경로로 시작하면 그대로 반환 (하위 호환)
+    - 상대경로면 uploads_dir 과 조합해 절대경로 반환
     """
     if os.path.isabs(path):
         return path
@@ -45,19 +57,31 @@ def to_relative_path(abs_path: str) -> str:
     try:
         return os.path.relpath(abs_path_norm, uploads_abs)
     except ValueError:
-        # Windows에서 드라이브가 다를 경우 절대경로 그대로 반환
         return abs_path
 
 
-# ── 디렉터리 헬퍼 ──────────────────────────────────────────────────
+# 디렉터리 헬퍼
 
 def get_dataset_upload_dir(dataset_id: int) -> str:
+    """데이터셋별 업로드 디렉터리 경로 반환 및 생성."""
     d = os.path.join(settings.uploads_dir, str(dataset_id))
     os.makedirs(d, exist_ok=True)
     return d
 
 
-# ── 해시 ────────────────────────────────────────────────────────────
+# 파일 읽기
+
+def get_file_bytes(path: str) -> bytes | None:
+    """로컬 디스크(또는 마운트된 NAS)에서 파일 bytes 반환. 없으면 None."""
+    abs_path = resolve_filepath(path)
+    try:
+        with open(abs_path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+# 해시
 
 def calculate_md5(filepath: str) -> str:
     h = hashlib.md5()
@@ -72,7 +96,7 @@ def calculate_md5_bytes(data: bytes) -> str:
 
 
 def calculate_phash(filepath: str) -> str:
-    """절대경로를 받아 퍼셉추얼 해시 반환"""
+    """절대경로를 받아 퍼셉추얼 해시 반환."""
     try:
         import imagehash
         img = PILImage.open(filepath).convert("RGB")
@@ -81,7 +105,7 @@ def calculate_phash(filepath: str) -> str:
         return ""
 
 
-# ── 이미지 메타 ─────────────────────────────────────────────────────
+# 이미지 메타
 
 def get_image_dimensions(filepath: str) -> tuple:
     with PILImage.open(filepath) as img:
@@ -92,58 +116,53 @@ def get_file_format(filepath: str) -> str:
     return Path(filepath).suffix.lower().lstrip(".")
 
 
-# ── 파일 저장 ────────────────────────────────────────────────────────
+# 파일 저장
+
+def save_image_to_storage(data: bytes, filename: str, dataset_id: int) -> tuple[str, str]:
+    """
+    이미지 bytes 를 저장.
+
+    Returns (abs_path, storage_key)
+      abs_path     : 크기/해시 추출용 로컬 절대경로
+      storage_key  : DB Image.filepath 에 저장할 상대경로
+    """
+    md5_prefix = calculate_md5_bytes(data)[:8]
+    safe_name = f"{md5_prefix}_{Path(filename).name}"
+    key = f"{dataset_id}/{safe_name}"
+    abs_path = os.path.join(settings.uploads_dir, key)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "wb") as f:
+        f.write(data)
+    return abs_path, key
+
 
 def save_uploaded_file(file_bytes: bytes, filename: str, dataset_id: int) -> str:
-    """
-    업로드된 파일을 저장하고 uploads_dir 기준 상대경로 반환.
-    예) "3/a1b2c3d4_myimage.jpg"
-    """
-    dest_dir = get_dataset_upload_dir(dataset_id)
-    name_hash = hashlib.md5(file_bytes).hexdigest()[:8]
-    stem = Path(filename).stem
-    suffix = Path(filename).suffix.lower()
-    safe_name = f"{name_hash}_{stem}{suffix}"
-    abs_path = os.path.join(dest_dir, safe_name)
-    with open(abs_path, "wb") as f:
-        f.write(file_bytes)
-    return to_relative_path(abs_path)
+    """업로드된 파일을 저장하고 상대경로(storage key) 반환."""
+    _, key = save_image_to_storage(file_bytes, filename, dataset_id)
+    return key
 
 
 def extract_zip_and_get_images(zip_bytes: bytes, dataset_id: int) -> list:
-    """
-    ZIP 파일에서 이미지를 추출하고 uploads_dir 기준 상대경로 목록 반환.
-    """
-    dest_dir = get_dataset_upload_dir(dataset_id)
-    tmp_zip = os.path.join(dest_dir, "_tmp_upload.zip")
-    with open(tmp_zip, "wb") as f:
-        f.write(zip_bytes)
-
-    rel_paths = []
-    with zipfile.ZipFile(tmp_zip, "r") as zf:
+    """ZIP 파일에서 이미지를 추출하고 storage key 목록 반환."""
+    keys = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         for member in zf.infolist():
             if member.is_dir():
                 continue
             suffix = Path(member.filename).suffix.lower()
             if suffix not in SUPPORTED_FORMATS:
                 continue
+            data = zf.read(member)
             safe_name = Path(member.filename).name
-            abs_path = os.path.join(dest_dir, safe_name)
-            with zf.open(member) as src, open(abs_path, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-            rel_paths.append(to_relative_path(abs_path))
-
-    os.remove(tmp_zip)
-    return rel_paths
+            _, key = save_image_to_storage(data, safe_name, dataset_id)
+            keys.append(key)
+    return keys
 
 
-# ── 파일 삭제 ────────────────────────────────────────────────────────
+# 파일 삭제
 
 def delete_file(path: str):
-    """
-    상대경로 또는 절대경로를 받아 파일 삭제.
-    resolve_filepath()로 절대경로를 복원한 후 삭제 시도.
-    """
+    """로컬 디스크(또는 마운트된 NAS)에서 파일 삭제."""
     try:
         abs_path = resolve_filepath(path)
         if os.path.exists(abs_path):
@@ -152,9 +171,10 @@ def delete_file(path: str):
         pass
 
 
-# ── 초기화 ────────────────────────────────────────────────────────────
+# 초기화
 
 def ensure_dirs():
+    """앱 시작 시 필요한 디렉터리 생성."""
     os.makedirs(settings.uploads_dir, exist_ok=True)
     os.makedirs(settings.exports_dir, exist_ok=True)
     os.makedirs(settings.embeddings_dir, exist_ok=True)

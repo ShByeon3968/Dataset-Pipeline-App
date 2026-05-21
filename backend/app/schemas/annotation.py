@@ -35,6 +35,8 @@ class AnnotationRead(BaseModel):
     bbox_h: Optional[float]
     segmentation: Optional[list] = None
     annotation_type: str
+    is_auto_generated: bool = False
+    confidence: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 

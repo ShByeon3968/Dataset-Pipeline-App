@@ -7,6 +7,11 @@ from app.sharding.config import ShardConfig, build_shard_configs, PARTITION_COUN
 from app.sharding.registry import ShardRegistry
 from app.database import Base
 
+# Idempotent migrations for images table
+_IMAGE_MIGRATIONS = [
+    "ALTER TABLE images ADD COLUMN IF NOT EXISTS split VARCHAR(10)",
+]
+
 # Idempotent migrations for annotations table (auto-label fields)
 _ANNOTATION_MIGRATIONS = [
     "ALTER TABLE annotations ADD COLUMN IF NOT EXISTS is_auto_generated BOOLEAN NOT NULL DEFAULT FALSE",
@@ -52,7 +57,7 @@ class ShardRouter:
             )
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-                for stmt in _ANNOTATION_MIGRATIONS + _RUN_MIGRATIONS:
+                for stmt in _IMAGE_MIGRATIONS + _ANNOTATION_MIGRATIONS + _RUN_MIGRATIONS:
                     try:
                         await conn.execute(text(stmt))
                     except Exception:

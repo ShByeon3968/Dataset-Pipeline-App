@@ -30,6 +30,8 @@ def _enrich(ann: Annotation, cls: Class | None) -> AnnotationRead:
         bbox_w=ann.bbox_w, bbox_h=ann.bbox_h,
         segmentation=seg,
         annotation_type=ann.annotation_type,
+        is_auto_generated=ann.is_auto_generated,
+        confidence=ann.confidence,
         created_at=ann.created_at, updated_at=ann.updated_at,
     )
 

@@ -36,17 +36,32 @@ class Settings(BaseSettings):
         )
 
     # File storage
+    # Docker 볼륨 마운트로 NAS 경로를 /app/data/uploads 에 연결하면
+    # 아래 기본값 그대로 사용해도 NAS에 저장됩니다.
     uploads_dir: str = "./data/uploads"
     exports_dir: str = "./data/exports"
     embeddings_dir: str = "./data/embeddings"
 
-    # CORS
-    cors_origins: list[str] = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://localhost:8080",
-        "http://localhost",
-    ]
+    # CORS - str 필드로 받아서 property에서 list로 변환
+    # pydantic-settings v2 는 list[str] 을 env에서 읽을 때 JSON 파싱을 먼저 시도하므로
+    # 쉼표 구분 문자열을 받으려면 str 필드 + property 방식을 사용해야 합니다.
+    #
+    # 예) CORS_ORIGINS=http://10.101.0.23:8080,http://localhost:8080
+    cors_origins_raw: str = (
+        "http://localhost:5173,http://localhost:3000,"
+        "http://localhost:8080,http://localhost"
+    )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """쉼표 구분 또는 JSON 배열 형식 모두 지원."""
+        v = self.cors_origins_raw.strip()
+        if not v:
+            return ["*"]
+        if v.startswith("["):
+            import json
+            return json.loads(v)
+        return [o.strip() for o in v.split(",") if o.strip()]
 
     # Roboflow
     roboflow_api_key: str = ""

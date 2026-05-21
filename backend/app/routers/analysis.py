@@ -57,6 +57,33 @@ async def annotation_embeddings(
     return await get_annotation_embeddings(db, dataset_id)
 
 
+@router.get("/split-stats")
+async def split_stats(
+    dataset_id: int,
+    db: AsyncSession = Depends(get_sharded_db),
+    _ds: Dataset = Depends(_require_dataset),
+):
+    """Return image counts grouped by split (train/val/test/unsplit)."""
+    from sqlalchemy import select, func, case
+    from app.models import Image
+    result = await db.execute(
+        select(
+            Image.split,
+            func.count(Image.id).label("count"),
+        )
+        .where(Image.dataset_id == dataset_id)
+        .group_by(Image.split)
+    )
+    rows = result.all()
+    counts = {"train": 0, "val": 0, "test": 0, "unsplit": 0}
+    total = 0
+    for split_val, cnt in rows:
+        key = split_val if split_val in ("train", "val", "test") else "unsplit"
+        counts[key] += cnt
+        total += cnt
+    return {**counts, "total": total}
+
+
 # Standalone COCO JSON analyzer (no dataset required)
 from fastapi import UploadFile, File
 import json
