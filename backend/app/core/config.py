@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     uploads_dir: str = "./data/uploads"
     exports_dir: str = "./data/exports"
     embeddings_dir: str = "./data/embeddings"
+    models_dir: str = "./data/models"
 
     # CORS - 쉼표 구분 문자열로 설정
     # 예) CORS_ORIGINS=http://192.168.1.10:8080,http://192.168.1.20:8080

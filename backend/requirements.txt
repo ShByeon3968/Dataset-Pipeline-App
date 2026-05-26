@@ -44,3 +44,6 @@ git+https://github.com/ultralytics/CLIP.git
 # Embedding visualization
 # UMAP 2D projection (GET /analysis/embeddings?method=umap)
 umap-learn>=0.5.6
+
+# ONNX 커스텀 모델 추론
+onnxruntime>=1.18.0

@@ -25,6 +25,7 @@ from app.routers import sharding as sharding_router
 from app.routers.versions import router as versions_router
 from app.routers.lineage import model_router as model_versions_router, lineage_router
 from app.routers.auto_label import router as auto_label_router
+from app.routers.onnx_models import router as onnx_models_router
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -96,6 +97,7 @@ app.include_router(versions_router, prefix=API_PREFIX)
 app.include_router(model_versions_router, prefix=API_PREFIX)
 app.include_router(lineage_router, prefix=API_PREFIX)
 app.include_router(auto_label_router, prefix=API_PREFIX)
+app.include_router(onnx_models_router, prefix=API_PREFIX)
 
 
 @app.get("/api/health")

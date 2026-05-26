@@ -1,8 +1,11 @@
 import client from './client'
 
 export interface AutoLabelRequest {
-  text_prompts: string[]
+  mode?: 'yolo_world' | 'onnx'
+  text_prompts?: string[]
+  onnx_model_id?: number | null
   confidence_threshold?: number
+  iou_threshold?: number
   overwrite?: boolean
 }
 
@@ -13,6 +16,7 @@ export interface AutoLabelRun {
   confidence_threshold: number
   iou_threshold: number
   text_prompts?: string | null
+  onnx_model_id?: number | null
   status: 'pending' | 'running' | 'completed' | 'failed'
   total_images: number
   processed_images: number

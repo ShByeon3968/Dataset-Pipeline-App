@@ -178,3 +178,4 @@ def ensure_dirs():
     os.makedirs(settings.uploads_dir, exist_ok=True)
     os.makedirs(settings.exports_dir, exist_ok=True)
     os.makedirs(settings.embeddings_dir, exist_ok=True)
+    os.makedirs(settings.models_dir, exist_ok=True)

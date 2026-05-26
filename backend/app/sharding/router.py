@@ -24,6 +24,7 @@ _ANNOTATION_MIGRATIONS = [
 # Idempotent migrations for auto_label_runs table
 _RUN_MIGRATIONS = [
     "ALTER TABLE auto_label_runs ADD COLUMN IF NOT EXISTS text_prompts TEXT",
+    "ALTER TABLE auto_label_runs ADD COLUMN IF NOT EXISTS onnx_model_id INTEGER",
 ]
 
 
