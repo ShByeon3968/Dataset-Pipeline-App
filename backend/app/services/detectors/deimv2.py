@@ -4,14 +4,20 @@ from .base import BaseDetector, Detection
 
 class DEIMv2Detector(BaseDetector):
     """
-    DEIMv2 ONNX 출력 형식:
-      outputs[0] = 'dets'   [1, 300, 4]  xyxy
-      outputs[1] = 'labels' [1, 300, nc] 클래스별 점수 행렬
+    DEIMv2 ONNX 출력 형식 - orig_target_sizes 전달 여부에 따라 두 가지:
 
-    orig_target_sizes 를 모델에 전달한 경우 박스 좌표는 원본 이미지(orig_w x orig_h)
-    픽셀 기준으로 출력됨. 전달하지 않은 경우 입력 해상도(input_w x input_h) 또는
-    0~1 정규화 좌표로 출력될 수 있음.
-    x2 > 2.0 로 픽셀/정규화 여부를 판별하고, 픽셀인 경우 orig_w/orig_h 로 정규화.
+    [형식 A] orig_target_sizes 없이 export
+      outputs[0] = 'dets'   [1, 300, 4]   float  xyxy (pixel or normalized)
+      outputs[1] = 'labels' [1, 300, nc]  float  class score matrix
+
+    [형식 B] orig_target_sizes 전달 시 (일반적)
+      outputs[0] = 'labels' [1, 300]      int64  class_id  <-- ndim==1
+      outputs[1] = 'boxes'  [1, 300, 4]   float  xyxy orig pixel (orig_w x orig_h)
+      outputs[2] = 'scores' [1, 300]      float  confidence
+
+    outputs[0][0].ndim 으로 형식 판별:
+      ndim == 1  ->  형식 B
+      ndim == 2  ->  형식 A
     """
 
     def preprocess(self, bgr: np.ndarray, input_w: int, input_h: int) -> np.ndarray:
@@ -21,31 +27,61 @@ class DEIMv2Detector(BaseDetector):
         return img.transpose(2, 0, 1)[np.newaxis]
 
     def postprocess(self, outputs, orig_w, orig_h, input_w, input_h, conf_threshold, iou_threshold):
-        boxes        = outputs[0][0]   # [300, 4]  xyxy
+        first = outputs[0][0]   # squeeze batch dim
+
+        if first.ndim == 1:
+            # 형식 B: labels(int) + boxes(xyxy pixel) + scores
+            return self._postprocess_b(outputs, orig_w, orig_h, conf_threshold)
+        else:
+            # 형식 A: dets(xyxy) + labels(score matrix)
+            return self._postprocess_a(outputs, orig_w, orig_h, input_w, input_h, conf_threshold)
+
+    def _postprocess_a(self, outputs, orig_w, orig_h, input_w, input_h, conf_threshold):
+        boxes        = outputs[0][0]   # [300, 4]
         class_scores = outputs[1][0]   # [300, nc]
 
         class_ids   = class_scores.argmax(axis=1)
         confidences = class_scores[np.arange(len(class_ids)), class_ids]
 
         mask = confidences >= conf_threshold
-        boxes, class_ids, confidences = boxes[mask], class_ids[mask], confidences[mask]
+        boxes       = boxes[mask]
+        class_ids   = class_ids[mask]
+        confidences = confidences[mask]
 
         results = []
         for i in range(len(class_ids)):
-            x1, y1, x2, y2 = boxes[i]
-
-            # 픽셀 좌표 여부 판별 후 orig 기준으로 정규화
-            # orig_target_sizes 전달 시 → 원본 픽셀(orig_w x orig_h) 기준
-            # 전달 안 한 경우    → 입력 픽셀(input_w x input_h) 기준 가능성 있음
-            if x2 > 2.0:
-                scale_x = orig_w if x2 <= orig_w * 1.1 else input_w
-                scale_y = orig_h if y2 <= orig_h * 1.1 else input_h
-                x1, x2 = x1 / scale_x, x2 / scale_x
-                y1, y2 = y1 / scale_y, y2 / scale_y
-
+            x1 = float(boxes[i, 0])
+            y1 = float(boxes[i, 1])
+            x2 = float(boxes[i, 2])
+            y2 = float(boxes[i, 3])
+            if x2 > 2.0:   # pixel coords -> normalize by orig size
+                x1, x2 = x1 / orig_w, x2 / orig_w
+                y1, y2 = y1 / orig_h, y2 / orig_h
             results.append(Detection(
-                x=float(x1), y=float(y1),
-                w=float(x2 - x1), h=float(y2 - y1),
+                x=x1, y=y1, w=x2 - x1, h=y2 - y1,
+                class_id=int(class_ids[i]),
+                confidence=float(confidences[i]),
+            ))
+        return results
+
+    def _postprocess_b(self, outputs, orig_w, orig_h, conf_threshold):
+        class_ids   = outputs[0][0].astype(int)   # [300]
+        boxes       = outputs[1][0]                # [300, 4] xyxy orig pixel
+        confidences = outputs[2][0].astype(float)  # [300]
+
+        mask = confidences >= conf_threshold
+        class_ids   = class_ids[mask]
+        boxes       = boxes[mask]
+        confidences = confidences[mask]
+
+        results = []
+        for i in range(len(class_ids)):
+            x1 = float(boxes[i, 0]) / orig_w
+            y1 = float(boxes[i, 1]) / orig_h
+            x2 = float(boxes[i, 2]) / orig_w
+            y2 = float(boxes[i, 3]) / orig_h
+            results.append(Detection(
+                x=x1, y=y1, w=x2 - x1, h=y2 - y1,
                 class_id=int(class_ids[i]),
                 confidence=float(confidences[i]),
             ))
