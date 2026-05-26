@@ -16,18 +16,18 @@ const CANVAS_W = 700
 const CANVAS_H = 500
 const PAGE_SIZE = 10
 
-// Auto-label annotation stroke color (orange)
-const AUTO_LABEL_COLOR = '#F97316'
 
 interface BBox { x: number; y: number; w: number; h: number }
 interface SelectedClass { id: number; color: string }
 
 // Returns stroke color and dash pattern based on whether annotation is auto-generated
+// Auto-generated: uses class color (same as manual) but dashed stroke to distinguish
 function getAnnStyle(ann: Annotation): { stroke: string; dash: number[] | undefined } {
+  const color = ann.class_color ?? '#FF6B6B'
   if (ann.is_auto_generated) {
-    return { stroke: AUTO_LABEL_COLOR, dash: [6, 3] }
+    return { stroke: color, dash: [6, 3] }
   }
-  return { stroke: ann.class_color ?? '#FF6B6B', dash: undefined }
+  return { stroke: color, dash: undefined }
 }
 
 // ── BBox Canvas ──────────────────────────────────────────────────
@@ -97,9 +97,7 @@ function BBoxCanvas({
         {annotations.map((ann) => {
           if (ann.bbox_x == null) return null
           const { stroke, dash } = getAnnStyle(ann)
-          const fillColor = ann.is_auto_generated
-            ? `${AUTO_LABEL_COLOR}1A`
-            : `${ann.class_color ?? '#FF6B6B'}22`
+          const fillColor = `${ann.class_color ?? '#FF6B6B'}22`
 
           const bx = ann.bbox_x * imgW
           const by = (ann.bbox_y ?? 0) * imgH
@@ -258,18 +256,15 @@ export default function LabelingPage() {
       {/* Legend */}
       <div className="flex items-center gap-4 mb-4 text-xs text-gray-500">
         <div className="flex items-center gap-1.5">
-          <div className="w-6 h-3 rounded border-2 border-blue-400" style={{ background: '#3B82F622' }} />
-          <span>Manual label</span>
+          <div className="w-6 h-3 rounded border-2 border-gray-400" style={{ background: '#94a3b822' }} />
+          <span>Manual — 실선</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div
             className="w-6 h-3 rounded"
-            style={{
-              border: `2px dashed ${AUTO_LABEL_COLOR}`,
-              background: `${AUTO_LABEL_COLOR}1A`,
-            }}
+            style={{ border: '2px dashed #94a3b8', background: '#94a3b822' }}
           />
-          <span>Auto label (AI)</span>
+          <span>Auto (AI) — 점선</span>
         </div>
       </div>
 
@@ -436,8 +431,8 @@ export default function LabelingPage() {
                     <div
                       className="w-2.5 h-2.5 rounded-full shrink-0 ring-1"
                       style={{
-                        background: isAuto ? AUTO_LABEL_COLOR : (ann.class_color ?? '#94a3b8'),
-                        ringColor: isAuto ? AUTO_LABEL_COLOR : 'transparent',
+                        background: ann.class_color ?? '#94a3b8',
+                        ringColor: 'transparent',
                       }}
                     />
 
