@@ -11,7 +11,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_sessions: dict[int, Any] = {}   # model_id → ort.InferenceSession
+_sessions: dict[int, Any] = {}   # model_id -> ort.InferenceSession
 
 
 def _abs(file_path: str, models_dir: str) -> str:
@@ -78,8 +78,18 @@ def run_inference(
     tensor = detector.preprocess(bgr, input_w, input_h)
 
     sess = get_session(model_id, file_path, models_dir)
-    input_name = sess.get_inputs()[0].name
-    outputs = sess.run(None, {input_name: tensor})
+
+    # 모든 필수 입력을 수집하여 feed dict 구성
+    # DETR 계열 모델은 images 외에 orig_target_sizes [1,2] 를 추가로 요구함
+    input_names = {inp.name for inp in sess.get_inputs()}
+    feed: dict[str, np.ndarray] = {sess.get_inputs()[0].name: tensor}
+
+    if "orig_target_sizes" in input_names:
+        # shape [1, 2] — (height, width) int64
+        feed["orig_target_sizes"] = np.array([[orig_h, orig_w]], dtype=np.int64)
+        logger.debug("orig_target_sizes 주입: [%d, %d]", orig_h, orig_w)
+
+    outputs = sess.run(None, feed)
 
     detections = detector.postprocess(
         outputs, orig_w, orig_h, input_w, input_h, conf_threshold, iou_threshold
