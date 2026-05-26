@@ -3,7 +3,7 @@ import client from './client'
 export interface OnnxModel {
   id: number
   name: string
-  architecture: 'yolov8' | 'yolov5' | 'rfdetr' | 'deimv2'
+  architecture: 'rfdetr' | 'deimv2'
   file_size: number | null
   class_labels: string[]
   input_width: number

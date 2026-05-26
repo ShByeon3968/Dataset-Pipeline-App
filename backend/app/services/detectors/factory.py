@@ -1,12 +1,8 @@
 from .base import BaseDetector
-from .yolov8 import YOLOv8Detector
-from .yolov5 import YOLOv5Detector
 from .rfdetr import RFDETRDetector
 from .deimv2 import DEIMv2Detector
 
 _MAP: dict[str, type[BaseDetector]] = {
-    "yolov8": YOLOv8Detector,
-    "yolov5": YOLOv5Detector,
     "rfdetr": RFDETRDetector,
     "deimv2": DEIMv2Detector,
 }

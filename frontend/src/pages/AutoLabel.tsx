@@ -24,8 +24,6 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 const ARCH_OPTIONS = [
-  { value: 'yolov8', label: 'YOLOv8' },
-  { value: 'yolov5', label: 'YOLOv5' },
   { value: 'rfdetr', label: 'RF-DETR' },
   { value: 'deimv2', label: 'DEIMv2' },
 ]
