@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react'
+import { useState, useRef, useMemo, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Stage, Layer, Rect, Image as KonvaImage, Text, Label, Tag } from 'react-konva'
 import useImage from 'use-image'
@@ -40,8 +40,10 @@ function BBoxCanvas({
   onAdd: (bbox: BBox) => void
 }) {
   const [img] = useImage(imageUrl, 'anonymous')
-  const [drawing, setDrawing] = useState(false)
-  const [startPos, setStartPos] = useState<Vector2d>({ x: 0, y: 0 })
+  // useRef 사용: Konva는 네이티브 DOM 이벤트를 사용하므로 useState는 렌더링 사이
+  // stale closure 문제를 일으킴. ref는 동기적으로 값이 반영되어 안전함.
+  const drawingRef = useRef(false)
+  const startPosRef = useRef<Vector2d>({ x: 0, y: 0 })
   const [currentRect, setCurrentRect] = useState<BBox | null>(null)
 
   const scale = img ? Math.min(CANVAS_W / img.width, CANVAS_H / img.height) : 1
@@ -55,23 +57,25 @@ function BBoxCanvas({
 
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
     const pos = getPos(e)
-    setDrawing(true)
-    setStartPos(pos)
+    drawingRef.current = true          // 동기 업데이트 — stale closure 없음
+    startPosRef.current = pos
+    setCurrentRect(null)               // 이전 잔여 preview 초기화
   }
 
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
-    if (!drawing) return
+    if (!drawingRef.current) return
     const pos = getPos(e)
+    const sp = startPosRef.current
     setCurrentRect({
-      x: Math.min(pos.x, startPos.x),
-      y: Math.min(pos.y, startPos.y),
-      w: Math.abs(pos.x - startPos.x),
-      h: Math.abs(pos.y - startPos.y),
+      x: Math.min(pos.x, sp.x),
+      y: Math.min(pos.y, sp.y),
+      w: Math.abs(pos.x - sp.x),
+      h: Math.abs(pos.y - sp.y),
     })
   }
 
   const handleMouseUp = () => {
-    if (drawing && currentRect && currentRect.w > 5 && currentRect.h > 5) {
+    if (drawingRef.current && currentRect && currentRect.w > 5 && currentRect.h > 5) {
       onAdd({
         x: currentRect.x / imgW,
         y: currentRect.y / imgH,
@@ -79,7 +83,13 @@ function BBoxCanvas({
         h: currentRect.h / imgH,
       })
     }
-    setDrawing(false)
+    drawingRef.current = false
+    setCurrentRect(null)
+  }
+
+  // 캔버스 밖으로 마우스가 나가면 드로잉 상태 초기화
+  const handleMouseLeave = () => {
+    drawingRef.current = false
     setCurrentRect(null)
   }
 
@@ -91,6 +101,7 @@ function BBoxCanvas({
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseLeave}
     >
       <Layer>
         {img && <KonvaImage image={img} width={imgW} height={imgH} />}
@@ -109,6 +120,7 @@ function BBoxCanvas({
 
           return (
             <Fragment key={ann.id}>
+              {/* listening={false}: 기존 박스가 마우스 이벤트를 가로채지 않도록 설정 */}
               <Rect
                 x={bx} y={by}
                 width={bw} height={bh}
@@ -116,8 +128,9 @@ function BBoxCanvas({
                 strokeWidth={ann.is_auto_generated ? 1.5 : 2}
                 dash={dash}
                 fill={fillColor}
+                listening={false}
               />
-              <Label x={bx} y={labelY}>
+              <Label x={bx} y={labelY} listening={false}>
                 <Tag
                   fill={stroke}
                   cornerRadius={3}
