@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Stage, Layer, Rect, Image as KonvaImage } from 'react-konva'
+import { Stage, Layer, Rect, Image as KonvaImage, Text, Label, Tag } from 'react-konva'
 import useImage from 'use-image'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { Vector2d } from 'konva/lib/types'
@@ -100,18 +100,41 @@ function BBoxCanvas({
           const fillColor = ann.is_auto_generated
             ? `${AUTO_LABEL_COLOR}1A`
             : `${ann.class_color ?? '#FF6B6B'}22`
+
+          const bx = ann.bbox_x * imgW
+          const by = (ann.bbox_y ?? 0) * imgH
+          const bw = (ann.bbox_w ?? 0) * imgW
+          const bh = (ann.bbox_h ?? 0) * imgH
+          const labelText = ann.class_name ?? 'Unlabeled'
+          // 박스 위에 공간이 있으면 위쪽, 없으면 박스 안 상단에 표시
+          const labelY = by >= 20 ? by - 20 : by + 2
+
           return (
-            <Rect
-              key={ann.id}
-              x={ann.bbox_x * imgW}
-              y={(ann.bbox_y ?? 0) * imgH}
-              width={(ann.bbox_w ?? 0) * imgW}
-              height={(ann.bbox_h ?? 0) * imgH}
-              stroke={stroke}
-              strokeWidth={ann.is_auto_generated ? 1.5 : 2}
-              dash={dash}
-              fill={fillColor}
-            />
+            <Fragment key={ann.id}>
+              <Rect
+                x={bx} y={by}
+                width={bw} height={bh}
+                stroke={stroke}
+                strokeWidth={ann.is_auto_generated ? 1.5 : 2}
+                dash={dash}
+                fill={fillColor}
+              />
+              <Label x={bx} y={labelY}>
+                <Tag
+                  fill={stroke}
+                  cornerRadius={3}
+                  opacity={0.82}
+                />
+                <Text
+                  text={labelText}
+                  fill="white"
+                  fontSize={11}
+                  fontFamily="Arial, sans-serif"
+                  fontStyle={ann.is_auto_generated ? 'italic' : 'normal'}
+                  padding={3}
+                />
+              </Label>
+            </Fragment>
           )
         })}
         {currentRect && (
