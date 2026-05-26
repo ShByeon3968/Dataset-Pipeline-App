@@ -163,9 +163,8 @@ async def _run_auto_label(
                     for det in detections:
                         cname = det["class_name"]
                         if cname not in class_map:
-                            new_cls = Class(dataset_id=dataset_id, name=cname)
-                            shard_session.add(new_cls)
-                            await shard_session.flush()
+                            from app.services.class_service import get_or_create_class
+                            new_cls = await get_or_create_class(shard_session, dataset_id, cname)
                             class_map[cname] = new_cls
 
                         seg_json = None
