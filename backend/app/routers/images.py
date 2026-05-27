@@ -9,7 +9,7 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel as _BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,6 +118,57 @@ async def upload_images(
 
     await db.commit()
     return {"added": len(added), "skipped": len(skipped), "errors": errors}
+
+
+# ── 비디오 업로드 및 프레임 추출 ──────────────────────────────────────
+
+@router.post("/upload-video", status_code=status.HTTP_201_CREATED)
+async def upload_video(
+    dataset_id: int,
+    file: UploadFile = File(...),
+    frame_step: int = Form(30),
+    db: AsyncSession = Depends(get_sharded_db),
+):
+    ds = await db.get(Dataset, dataset_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
+
+    video_bytes = await file.read()
+    
+    from app.services.video_service import extract_frames_from_video
+    keys = extract_frames_from_video(video_bytes, file.filename or "video.mp4", dataset_id, frame_step)
+    
+    if not keys:
+        raise HTTPException(status_code=400, detail="비디오에서 프레임을 추출하지 못했습니다.")
+        
+    existing = await db.execute(
+        select(Image.file_hash).where(Image.dataset_id == dataset_id)
+    )
+    existing_hashes = {row[0] for row in existing if row[0]}
+
+    added = 0
+    for rel_path in keys:
+        abs_path = resolve_filepath(rel_path)
+        md5 = calculate_md5(abs_path)
+        if md5 in existing_hashes:
+            continue
+            
+        w, h = get_image_dimensions(abs_path)
+        phash = calculate_phash(abs_path)
+        fmt = get_file_format(abs_path)
+        img = Image(
+            dataset_id=dataset_id,
+            filename=Path(abs_path).name,
+            filepath=rel_path,
+            width=w, height=h, format=fmt,
+            file_hash=md5, phash=phash,
+        )
+        db.add(img)
+        existing_hashes.add(md5)
+        added += 1
+
+    await db.commit()
+    return {"added": added, "extracted": len(keys)}
 
 
 # ── ZIP 업로드 (어노테이션 없음) ─────────────────────────────────────

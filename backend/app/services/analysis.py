@@ -257,7 +257,7 @@ def _project_tsne(matrix: np.ndarray, perplexity: int = 30) -> np.ndarray:
     """t-SNE 2D 투영 (scikit-learn)."""
     from sklearn.manifold import TSNE
     perp = min(perplexity, max(2, len(matrix) - 1))
-    tsne = TSNE(n_components=2, perplexity=perp, random_state=42, n_iter=500)
+    tsne = TSNE(n_components=2, perplexity=perp, random_state=42)
     return tsne.fit_transform(matrix).astype(np.float32)
 
 

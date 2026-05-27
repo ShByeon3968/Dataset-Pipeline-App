@@ -60,6 +60,27 @@ export const imagesApi = {
     ).then(r => r.data)
   },
 
+  uploadVideo: (
+    datasetId: number,
+    file: File,
+    frameStep: number,
+    onProgress?: (pct: number) => void,
+  ) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('frame_step', frameStep.toString())
+    return client.post<{ added: number; extracted: number }>(
+      `/datasets/${datasetId}/images/upload-video`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: e => {
+          if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total))
+        },
+      }
+    ).then(r => r.data)
+  },
+
   importRoboflow: (
     datasetId: number,
     apiKey: string,

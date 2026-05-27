@@ -17,8 +17,9 @@ export default function UploadPage() {
   const { selectedDataset, setSelectedDataset } = useAppStore()
   const [newName, setNewName]   = useState('')
   const [newDesc, setNewDesc]   = useState('')
-  const [tab, setTab]           = useState<'images' | 'zip' | 'annotated' | 'roboflow'>('images')
+  const [tab, setTab]           = useState<'images' | 'zip' | 'annotated' | 'video' | 'roboflow'>('images')
   const [annotatedFormat, setAnnotatedFormat] = useState<'auto' | 'coco' | 'yolo'>('auto')
+  const [frameStep, setFrameStep] = useState(30)
   const [progress, setProgress] = useState(0)
   const [previewPage, setPreviewPage] = useState(0)
 
@@ -94,6 +95,17 @@ export default function UploadPage() {
     onError: (e: Error) => { toast.dismiss(); toast.error(e.message); setProgress(0) },
   })
 
+  const videoMutation = useMutation({
+    mutationFn: (file: File) => imagesApi.uploadVideo(selectedDataset!.id, file, frameStep, setProgress),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['datasets'] })
+      qc.invalidateQueries({ queryKey: ['images-preview', selectedDataset?.id] })
+      toast.success(`비디오 추출 완료: ${res.extracted}개 프레임 추출, ${res.added}개 추가됨`)
+      setProgress(0); setPreviewPage(0)
+    },
+    onError: (e: Error) => { toast.error(e.message); setProgress(0) },
+  })
+
   const roboflowMutation = useMutation({
     mutationFn: async () => {
       // 1단계: 요청 → task_id 즉시 반환 (202)
@@ -129,6 +141,8 @@ export default function UploadPage() {
   const { getRootProps, getInputProps, isDragActive, acceptedFiles } = useDropzone({
     accept: tab === 'images'
       ? { 'image/*': ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'] }
+      : tab === 'video'
+      ? { 'video/*': ['.mp4', '.avi', '.mov', '.webm'] }
       : { 'application/zip': ['.zip'] },
     multiple: tab === 'images',
     disabled: tab === 'roboflow',
@@ -139,6 +153,7 @@ export default function UploadPage() {
     if (!acceptedFiles.length) return toast.error('파일을 선택하세요.')
     if (tab === 'zip') return zipMutation.mutate(acceptedFiles[0])
     if (tab === 'annotated') return annotatedMutation.mutate(acceptedFiles[0])
+    if (tab === 'video') return videoMutation.mutate(acceptedFiles[0])
     uploadMutation.mutate(acceptedFiles)
   }
 
@@ -162,7 +177,7 @@ export default function UploadPage() {
 
   const isUploading =
     uploadMutation.isPending || zipMutation.isPending ||
-    annotatedMutation.isPending || roboflowMutation.isPending
+    annotatedMutation.isPending || roboflowMutation.isPending || videoMutation.isPending
 
   return (
     <div>
@@ -232,6 +247,7 @@ export default function UploadPage() {
             { key: 'images',    label: '이미지 파일' },
             { key: 'zip',       label: 'ZIP (이미지만)' },
             { key: 'annotated', label: 'ZIP (어노테이션 포함)' },
+            { key: 'video',     label: '비디오 파일' },
             { key: 'roboflow',  label: '🔗 Roboflow' },
           ] as const).map(({ key, label }) => (
             <button
@@ -262,6 +278,22 @@ export default function UploadPage() {
               </label>
             ))}
             <span className="text-xs text-gray-400 ml-auto">COCO JSON / YOLO 지원</span>
+          </div>
+        )}
+
+        {/* 비디오 옵션 */}
+        {tab === 'video' && (
+          <div className="flex items-center gap-3 mb-4 p-3 bg-purple-50 rounded-lg text-sm">
+            <span className="text-gray-600 font-medium shrink-0">추출 간격:</span>
+            <input 
+              type="number" 
+              min="1" 
+              className="w-20 px-2 py-1 border rounded text-right focus:outline-none focus:ring-2 focus:ring-purple-500"
+              value={frameStep} 
+              onChange={e => setFrameStep(parseInt(e.target.value) || 30)} 
+            />
+            <span className="text-gray-700">프레임마다 1장 추출</span>
+            <span className="text-xs text-gray-400 ml-auto">간격이 짧을수록 생성되는 이미지가 늘어납니다. (기본 30)</span>
           </div>
         )}
 
@@ -356,10 +388,14 @@ export default function UploadPage() {
               ) : (
                 <>
                   <p className="text-gray-600 font-medium mb-1">
-                    {tab === 'images' ? '이미지 파일을 드래그하거나 클릭하세요' : 'ZIP 파일을 드래그하거나 클릭하세요'}
+                    {tab === 'images' ? '이미지 파일을 드래그하거나 클릭하세요' : 
+                     tab === 'video'  ? '비디오 파일을 드래그하거나 클릭하세요' :
+                     'ZIP 파일을 드래그하거나 클릭하세요'}
                   </p>
                   <p className="text-xs text-gray-400">
-                    {tab === 'images' ? 'JPG, PNG, BMP, TIFF, WebP 지원' : '.zip 파일'}
+                    {tab === 'images' ? 'JPG, PNG, BMP, TIFF, WebP 지원' : 
+                     tab === 'video'  ? 'MP4, AVI, MOV, WebM 지원' :
+                     '.zip 파일'}
                   </p>
                 </>
               )}
