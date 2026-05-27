@@ -171,6 +171,19 @@ def delete_file(path: str):
         pass
 
 
+def delete_dataset_files(dataset_id: int):
+    """데이터셋 삭제 시 연관된 업로드 및 내보내기 폴더를 모두 삭제합니다."""
+    uploads_path = os.path.join(settings.uploads_dir, str(dataset_id))
+    exports_path = os.path.join(settings.exports_dir, str(dataset_id))
+    
+    for p in [uploads_path, exports_path]:
+        try:
+            if os.path.exists(p):
+                shutil.rmtree(p)
+        except Exception as e:
+            logger.error(f"Failed to delete dataset files at {p}: {e}")
+
+
 # 초기화
 
 def ensure_dirs():

@@ -12,8 +12,8 @@ class OnnxModel(Base):
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     class_labels: Mapped[str] = mapped_column(Text, nullable=False)   # JSON array
-    input_width: Mapped[int] = mapped_column(Integer, nullable=False, default=640)
-    input_height: Mapped[int] = mapped_column(Integer, nullable=False, default=640)
+    input_width: Mapped[int] = mapped_column(Integer, nullable=False, default=384)
+    input_height: Mapped[int] = mapped_column(Integer, nullable=False, default=384)
     conf_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.25)
     iou_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.45)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -13,10 +13,10 @@ import { useAppStore } from '../store'
 // ── 상수 ──────────────────────────────────────────────────────────────────
 
 const STATUS_ICONS: Record<string, React.ReactNode> = {
-  pending:   <Clock       className="w-4 h-4 text-yellow-500" />,
-  running:   <Loader2     className="w-4 h-4 text-blue-500 animate-spin" />,
+  pending: <Clock className="w-4 h-4 text-yellow-500" />,
+  running: <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />,
   completed: <CheckCircle className="w-4 h-4 text-green-500" />,
-  failed:    <AlertCircle className="w-4 h-4 text-red-500" />,
+  failed: <AlertCircle className="w-4 h-4 text-red-500" />,
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -106,16 +106,16 @@ interface UploadModalProps {
 }
 
 function OnnxUploadModal({ onClose, onUploaded }: UploadModalProps) {
-  const [file, setFile]         = useState<File | null>(null)
-  const [name, setName]         = useState('')
-  const [arch, setArch]         = useState('yolov8')
-  const [labels, setLabels]     = useState<string[]>([])
-  const [inputW, setInputW]     = useState(640)
-  const [inputH, setInputH]     = useState(640)
-  const [conf, setConf]         = useState(0.25)
-  const [iou, setIou]           = useState(0.45)
+  const [file, setFile] = useState<File | null>(null)
+  const [name, setName] = useState('')
+  const [arch, setArch] = useState('yolov8')
+  const [labels, setLabels] = useState<string[]>([])
+  const [inputW, setInputW] = useState(384)
+  const [inputH, setInputH] = useState(384)
+  const [conf, setConf] = useState(0.25)
+  const [iou, setIou] = useState(0.45)
   const [progress, setProgress] = useState(0)
-  const [error, setError]       = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const uploadMut = useMutation({
     mutationFn: () =>
@@ -285,11 +285,11 @@ export default function AutoLabel() {
   const qc = useQueryClient()
 
   // ── 공통 상태 ──
-  const [mode, setMode]                   = useState<'yolo_world' | 'onnx'>('yolo_world')
-  const [confidence, setConfidence]       = useState(0.25)
-  const [iouThreshold, setIouThreshold]   = useState(0.45)
-  const [overwrite, setOverwrite]         = useState(false)
-  const [pollingRunId, setPollingRunId]   = useState<number | null>(null)
+  const [mode, setMode] = useState<'yolo_world' | 'onnx'>('yolo_world')
+  const [confidence, setConfidence] = useState(0.25)
+  const [iouThreshold, setIouThreshold] = useState(0.45)
+  const [overwrite, setOverwrite] = useState(false)
+  const [pollingRunId, setPollingRunId] = useState<number | null>(null)
 
   // YOLO-World
   const [textPrompts, setTextPrompts] = useState<string[]>([])
@@ -326,10 +326,10 @@ export default function AutoLabel() {
     mutationFn: () =>
       autoLabelApi.startRun(selectedDataset!.id, {
         mode,
-        text_prompts:         mode === 'yolo_world' ? textPrompts : [],
-        onnx_model_id:        mode === 'onnx' ? selectedModelId! : undefined,
+        text_prompts: mode === 'yolo_world' ? textPrompts : [],
+        onnx_model_id: mode === 'onnx' ? selectedModelId! : undefined,
         confidence_threshold: confidence,
-        iou_threshold:        iouThreshold,
+        iou_threshold: iouThreshold,
         overwrite,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['autoLabelRuns', selectedDataset?.id] }),
@@ -391,21 +391,19 @@ export default function AutoLabel() {
           {/* 모드 토글 */}
           <div className="flex gap-1 p-1 bg-gray-100 rounded-lg mb-5 w-fit">
             <button
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                mode === 'yolo_world'
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'yolo_world'
                   ? 'bg-white shadow text-blue-600'
                   : 'text-gray-500 hover:text-gray-700'
-              }`}
+                }`}
               onClick={() => setMode('yolo_world')}
             >
               YOLO-World
             </button>
             <button
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${
-                mode === 'onnx'
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${mode === 'onnx'
                   ? 'bg-white shadow text-blue-600'
                   : 'text-gray-500 hover:text-gray-700'
-              }`}
+                }`}
               onClick={() => setMode('onnx')}
             >
               <Server className="w-3.5 h-3.5" />
@@ -463,11 +461,10 @@ export default function AutoLabel() {
                   {onnxModels.map((m: OnnxModel) => (
                     <label
                       key={m.id}
-                      className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
-                        selectedModelId === m.id
+                      className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${selectedModelId === m.id
                           ? 'border-blue-500 bg-blue-50'
                           : 'border-gray-200 hover:border-gray-300'
-                      }`}
+                        }`}
                     >
                       <input
                         type="radio"

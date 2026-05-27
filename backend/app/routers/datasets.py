@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models import Dataset, Image, Annotation, Class
 from app.schemas.dataset import DatasetCreate, DatasetUpdate, DatasetRead, DatasetList
 from app.sharding.router import shard_router
+from app.services.file_handler import delete_dataset_files
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -129,3 +130,4 @@ async def delete_dataset(dataset_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Dataset not found.")
     await db.delete(ds)
     await shard_router.remove_dataset(dataset_id)
+    delete_dataset_files(dataset_id)

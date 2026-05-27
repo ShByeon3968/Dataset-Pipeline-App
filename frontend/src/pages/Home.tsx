@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Upload, Tag, BarChart2, Scissors, GitMerge, Download, Plus, AlertCircle, RefreshCw } from 'lucide-react'
+import { Upload, Tag, BarChart2, Scissors, GitMerge, Download, Plus, AlertCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { datasetsApi } from '../api/datasets'
 import { useAppStore } from '../store'
 
@@ -21,6 +21,17 @@ export default function Home() {
     retryDelay: 2000,
   })
   const { setSelectedDataset } = useAppStore()
+
+  const handleDelete = async (id: number, name: string) => {
+    if (window.confirm(`데이터셋 "${name}"을(를) 삭제하시겠습니까?\n관련 이미지와 주석 데이터가 모두 삭제됩니다.`)) {
+      try {
+        await datasetsApi.delete(id)
+        refetch()
+      } catch (err) {
+        alert('삭제 중 오류가 발생했습니다.')
+      }
+    }
+  }
 
   return (
     <div>
@@ -100,7 +111,7 @@ export default function Home() {
         {/* List */}
         <div className="divide-y divide-gray-100">
           {data?.items.map(ds => (
-            <div key={ds.id} className="py-3 flex items-center justify-between">
+            <div key={ds.id} className="py-3 flex items-center justify-between group">
               <div>
                 <span className="font-medium">{ds.name}</span>
                 <span className="ml-2 text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">
@@ -110,12 +121,21 @@ export default function Home() {
                   이미지 {ds.image_count} · 주석 {ds.annotation_count} · 클래스 {ds.class_count}
                 </p>
               </div>
-              <button
-                onClick={() => setSelectedDataset(ds)}
-                className="btn-secondary text-xs"
-              >
-                선택
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleDelete(ds.id, ds.name)}
+                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="삭제"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setSelectedDataset(ds)}
+                  className="btn-secondary text-xs"
+                >
+                  선택
+                </button>
+              </div>
             </div>
           ))}
         </div>
