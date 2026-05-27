@@ -79,7 +79,7 @@ async def list_datasets(db: AsyncSession = Depends(get_db)):
 async def create_dataset(payload: DatasetCreate, db: AsyncSession = Depends(get_db)):
     ds = Dataset(**payload.model_dump())
     db.add(ds)
-    await db.flush()
+    await db.commit()
     await db.refresh(ds)
     shard_id = await shard_router.assign_dataset(ds.id)
     return DatasetRead(
@@ -112,7 +112,7 @@ async def update_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found.")
     for field, val in payload.model_dump(exclude_none=True).items():
         setattr(ds, field, val)
-    await db.flush()
+    await db.commit()
     await db.refresh(ds)
     img_count, ann_count, cls_count = await _fetch_counts(db, dataset_id)
     return DatasetRead(

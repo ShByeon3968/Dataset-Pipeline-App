@@ -116,7 +116,7 @@ async def upload_images(
         except Exception as e:
             errors.append({"filename": upload.filename, "reason": str(e)})
 
-    await db.flush()
+    await db.commit()
     return {"added": len(added), "skipped": len(skipped), "errors": errors}
 
 
@@ -159,7 +159,7 @@ async def upload_zip(
         existing_hashes.add(md5)
         added += 1
 
-    await db.flush()
+    await db.commit()
     return {"added": added}
 
 

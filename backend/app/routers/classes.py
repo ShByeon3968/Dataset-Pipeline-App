@@ -19,7 +19,7 @@ async def create_class(dataset_id: int, payload: ClassCreate, db: AsyncSession =
     cls = await get_or_create_class(db, dataset_id, payload.name)
     if payload.color:
         cls.color = payload.color
-    await db.flush()
+    await db.commit()
     return ClassRead.model_validate(cls)
 
 @router.patch("/{class_id}", response_model=ClassRead)
@@ -29,7 +29,7 @@ async def update_class(dataset_id: int, class_id: int, payload: ClassUpdate, db:
         raise HTTPException(status_code=404, detail="클래스를 찾을 수 없습니다.")
     for field, val in payload.model_dump(exclude_none=True).items():
         setattr(cls, field, val)
-    await db.flush()
+    await db.commit()
     await db.refresh(cls)
     return ClassRead.model_validate(cls)
 

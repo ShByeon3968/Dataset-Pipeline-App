@@ -78,7 +78,7 @@ async def create_annotation(
         segmentation=json.dumps(payload.segmentation) if payload.segmentation else None,
     )
     db.add(ann)
-    await db.flush()
+    await db.commit()
     await db.refresh(ann)
 
     cls = await db.get(Class, ann.class_id) if ann.class_id else None
@@ -101,7 +101,7 @@ async def update_annotation(
     for field, val in payload.model_dump(exclude_none=True).items():
         setattr(ann, field, val)
 
-    await db.flush()
+    await db.commit()
     await db.refresh(ann)
     cls = await db.get(Class, ann.class_id) if ann.class_id else None
     return _enrich(ann, cls)
