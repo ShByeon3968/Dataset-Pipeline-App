@@ -9,6 +9,7 @@ import type { AutoLabelRun } from '../api/autoLabel'
 import { onnxModelsApi } from '../api/onnxModels'
 import type { OnnxModel } from '../api/onnxModels'
 import { useAppStore } from '../store'
+import { imagesApi } from '../api/images'
 
 // ── 상수 ──────────────────────────────────────────────────────────────────
 
@@ -289,6 +290,9 @@ export default function AutoLabel() {
   const [confidence, setConfidence] = useState(0.25)
   const [iouThreshold, setIouThreshold] = useState(0.45)
   const [overwrite, setOverwrite] = useState(false)
+  const [skipLabeled, setSkipLabeled] = useState(true)
+  const [targetScope, setTargetScope] = useState<'all' | 'batch'>('all')
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
   const [pollingRunId, setPollingRunId] = useState<number | null>(null)
 
   // YOLO-World
@@ -304,6 +308,13 @@ export default function AutoLabel() {
     enabled: !!selectedDataset,
     refetchInterval: pollingRunId ? 3000 : false,
     select: (r) => r.data,
+  })
+
+  const { data: batchesData } = useQuery({
+    queryKey: ['imageBatches', selectedDataset?.id],
+    queryFn: () => imagesApi.getBatches(selectedDataset!.id),
+    enabled: !!selectedDataset,
+    staleTime: 5000,
   })
 
   const { data: onnxModels, refetch: refetchModels } = useQuery({
@@ -330,7 +341,9 @@ export default function AutoLabel() {
         onnx_model_id: mode === 'onnx' ? selectedModelId! : undefined,
         confidence_threshold: confidence,
         iou_threshold: iouThreshold,
-        overwrite,
+        overwrite: targetScope === 'batch' ? false : overwrite,
+        skip_labeled: skipLabeled,
+        upload_batch_id: targetScope === 'batch' ? selectedBatchId : null,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['autoLabelRuns', selectedDataset?.id] }),
   })
@@ -361,7 +374,8 @@ export default function AutoLabel() {
   const isRunning = latestRun?.status === 'pending' || latestRun?.status === 'running'
   const canStart =
     !isRunning && !startMut.isPending &&
-    (mode === 'yolo_world' ? textPrompts.length > 0 : selectedModelId !== null)
+    (mode === 'yolo_world' ? textPrompts.length > 0 : selectedModelId !== null) &&
+    (targetScope === 'all' || selectedBatchId !== null)
 
   if (!selectedDataset) {
     return (
@@ -507,6 +521,57 @@ export default function AutoLabel() {
             </div>
           )}
 
+          {/* 대상 범위 선택 */}
+          <div className="mb-5">
+            <label className="form-label block mb-2">대상 이미지 범위</label>
+            <div className="flex gap-4 mb-3">
+              <label className="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="targetScope"
+                  checked={targetScope === 'all'}
+                  onChange={() => { setTargetScope('all'); setSelectedBatchId(null) }}
+                  className="accent-blue-600"
+                />
+                전체 이미지
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="targetScope"
+                  checked={targetScope === 'batch'}
+                  onChange={() => setTargetScope('batch')}
+                  className="accent-blue-600"
+                />
+                특정 업로드 배치 선택
+              </label>
+            </div>
+
+            {targetScope === 'batch' && (
+              <div className="pl-5">
+                {!batchesData || batchesData.items.length === 0 ? (
+                  <p className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-lg">등록된 업로드 배치가 없습니다.</p>
+                ) : (
+                  <select
+                    value={selectedBatchId ?? ''}
+                    onChange={e => setSelectedBatchId(e.target.value || null)}
+                    className="w-full max-w-md border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="">-- 배치를 선택해 주세요 --</option>
+                    {batchesData.items.map((b: { batch_id: string | null; count: number }) => (
+                      <option key={b.batch_id ?? 'legacy'} value={b.batch_id ?? ''}>
+                        {b.batch_id ? `${b.batch_id} (${b.count}장)` : `기존 미지정 데이터 (${b.count}장)`}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {selectedBatchId === null && batchesData && batchesData.items.length > 0 && (
+                  <p className="text-xs text-red-500 mt-1">업로드 배치를 선택해주세요.</p>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* 공통: 신뢰도 슬라이더 */}
           <div className="mb-4">
             <label className="form-label">
@@ -539,13 +604,25 @@ export default function AutoLabel() {
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm text-gray-700 mb-4 cursor-pointer">
-            <input
-              type="checkbox" checked={overwrite}
-              onChange={e => setOverwrite(e.target.checked)} className="rounded"
-            />
-            기존 자동 레이블 덮어쓰기
-          </label>
+          <div className="flex flex-col gap-2.5 mb-5">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox" checked={skipLabeled}
+                onChange={e => setSkipLabeled(e.target.checked)} className="rounded"
+              />
+              이미 레이블링 완료된 이미지 제외 (새로운 데이터만 진행)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox" checked={targetScope === 'batch' ? false : overwrite}
+                onChange={e => setOverwrite(e.target.checked)} className="rounded"
+                disabled={skipLabeled || targetScope === 'batch'}
+              />
+              <span className={(skipLabeled || targetScope === 'batch') ? 'text-gray-400' : ''}>
+                기존 자동 레이블 덮어쓰기 {targetScope === 'batch' && '(배치 작업 시 지원 안 함)'}
+              </span>
+            </label>
+          </div>
 
           <button
             className="btn-primary flex items-center gap-2"

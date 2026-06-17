@@ -29,6 +29,8 @@ class AutoLabelRequest(BaseModel):
     confidence_threshold: float = Field(default=0.25, ge=0.01, le=1.0)
     iou_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     overwrite: bool = Field(default=False)
+    skip_labeled: bool = Field(default=True)
+    upload_batch_id: str | None = Field(default=None)
 
 
 class AutoLabelRunRead(BaseModel):
@@ -64,6 +66,8 @@ async def _run_auto_label(
     confidence_threshold: float,
     iou_threshold: float,
     overwrite: bool,
+    skip_labeled: bool,
+    upload_batch_id: str | None = None,
 ):
     from app.services.file_handler import resolve_filepath
     from app.sharding.router import shard_router
@@ -100,10 +104,24 @@ async def _run_auto_label(
             await meta_session.commit()
 
         async with shard_session:
-            img_result = await shard_session.execute(
-                select(Image).where(Image.dataset_id == dataset_id)
-            )
+            query = select(Image).where(Image.dataset_id == dataset_id)
+            if upload_batch_id is not None:
+                query = query.where(Image.upload_batch_id == upload_batch_id)
+            if skip_labeled:
+                labeled_img_ids = select(Annotation.image_id).distinct()
+                query = query.where(~Image.id.in_(labeled_img_ids))
+                
+            img_result = await shard_session.execute(query)
             images = img_result.scalars().all()
+            total = len(images)
+
+            async with shard_router.get_meta_session() as ms_update:
+                await ms_update.execute(
+                    update(AutoLabelRun)
+                    .where(AutoLabelRun.id == run_id)
+                    .values(total_images=total)
+                )
+                await ms_update.commit()
 
             cls_result = await shard_session.execute(
                 select(Class).where(Class.dataset_id == dataset_id)
@@ -252,9 +270,14 @@ async def start_auto_label(
     if running:
         raise HTTPException(status_code=409, detail="이미 실행 중인 작업이 있습니다.")
 
-    total_images = await db.scalar(
-        select(func.count(Image.id)).where(Image.dataset_id == dataset_id)
-    ) or 0
+    query_total = select(func.count(Image.id)).where(Image.dataset_id == dataset_id)
+    if req.upload_batch_id is not None:
+        query_total = query_total.where(Image.upload_batch_id == req.upload_batch_id)
+    if req.skip_labeled:
+        labeled_img_ids = select(Annotation.image_id).distinct()
+        query_total = query_total.where(~Image.id.in_(labeled_img_ids))
+
+    total_images = await db.scalar(query_total) or 0
 
     if req.mode == "onnx":
         model_name = f"onnx:{req.onnx_model_id}"
@@ -285,6 +308,8 @@ async def start_auto_label(
         confidence_threshold=req.confidence_threshold,
         iou_threshold=req.iou_threshold,
         overwrite=req.overwrite,
+        skip_labeled=req.skip_labeled,
+        upload_batch_id=req.upload_batch_id,
     )
     return run
 

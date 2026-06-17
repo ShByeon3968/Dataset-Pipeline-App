@@ -10,6 +10,7 @@ from app.database import Base
 # Idempotent migrations for images table
 _IMAGE_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN IF NOT EXISTS split VARCHAR(10)",
+    "ALTER TABLE images ADD COLUMN IF NOT EXISTS upload_batch_id VARCHAR(100)",
 ]
 
 # Idempotent migrations for annotations table (auto-label fields)

@@ -22,6 +22,7 @@ class Image(Base):
     # Export uses this to build per-split folder structure; images with None
     # are assigned to splits proportionally at export time.
     split: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    upload_batch_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     dataset = relationship("Dataset", back_populates="images", lazy="noload")

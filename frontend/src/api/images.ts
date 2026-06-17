@@ -7,6 +7,11 @@ export const imagesApi = {
       `/datasets/${datasetId}/images?skip=${skip}&limit=${limit}`
     ).then(r => r.data),
 
+  getBatches: (datasetId: number) =>
+    client.get<{ items: { batch_id: string | null; count: number }[]; total: number }>(
+      `/datasets/${datasetId}/images/batches`
+    ).then(r => r.data),
+
   get: (datasetId: number, imageId: number) =>
     client.get<Image>(`/datasets/${datasetId}/images/${imageId}`).then(r => r.data),
 

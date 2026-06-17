@@ -173,6 +173,7 @@ async def _import_coco(
     dataset_id: int,
     zf: zipfile.ZipFile,
     existing_hashes: set[str],
+    upload_batch_id: str | None = None,
 ) -> dict[str, int]:
     split_entries = _parse_coco_structure(zf)
 
@@ -270,6 +271,7 @@ async def _import_coco(
                 file_hash=md5,
                 phash=phash,
                 split=split_value,
+                upload_batch_id=upload_batch_id,
             )
             db.add(img_obj)
             pending.append((coco_img_id, img_obj))
@@ -418,6 +420,7 @@ async def _import_yolo(
     dataset_id: int,
     zf: zipfile.ZipFile,
     existing_hashes: set[str],
+    upload_batch_id: str | None = None,
 ) -> dict[str, int]:
     class_names = _load_yolo_classes(zf)
     class_db_map: dict[int, int] = {}
@@ -473,6 +476,7 @@ async def _import_yolo(
             file_hash=md5,
             phash=phash,
             split=split_value,
+            upload_batch_id=upload_batch_id,
         )
         db.add(img_obj)
         pending.append((zip_member, img_obj))
@@ -539,6 +543,7 @@ async def import_dataset_zip(
     zip_bytes: bytes,
     existing_hashes: set[str],
     force_format: str | None = None,
+    upload_batch_id: str | None = None,
 ) -> dict:
     try:
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
@@ -548,9 +553,9 @@ async def import_dataset_zip(
     fmt = force_format or _detect_format(zf.namelist())
 
     if fmt == "coco":
-        result = await _import_coco(db, dataset_id, zf, existing_hashes)
+        result = await _import_coco(db, dataset_id, zf, existing_hashes, upload_batch_id=upload_batch_id)
     elif fmt == "yolo":
-        result = await _import_yolo(db, dataset_id, zf, existing_hashes)
+        result = await _import_yolo(db, dataset_id, zf, existing_hashes, upload_batch_id=upload_batch_id)
     else:
         raise ValueError(f"Unsupported format: {fmt}")
 

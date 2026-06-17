@@ -7,6 +7,7 @@ filepath 컬럼에는 상대경로가 저장되므로,
 import io as _io
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status, Query
@@ -69,6 +70,31 @@ async def list_images(
     )
 
 
+@router.get("/batches")
+async def list_image_batches(
+    dataset_id: int,
+    db: AsyncSession = Depends(get_sharded_db),
+):
+    """해당 데이터셋에 속한 모든 이미지의 업로드 배치 목록과 이미지 수 반환"""
+    result = await db.execute(
+        select(
+            Image.upload_batch_id,
+            func.count(Image.id)
+        )
+        .where(Image.dataset_id == dataset_id)
+        .group_by(Image.upload_batch_id)
+        .order_by(func.max(Image.created_at).desc())
+    )
+    batches = []
+    for row in result.all():
+        batch_id, count = row
+        batches.append({
+            "batch_id": batch_id,
+            "count": count
+        })
+    return {"items": batches, "total": len(batches)}
+
+
 # ── 개별 파일 업로드 ─────────────────────────────────────────────────
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
@@ -86,6 +112,7 @@ async def upload_images(
     )
     existing_hashes = {row[0] for row in existing if row[0]}
 
+    batch_id = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     added, skipped, errors = [], [], []
     for upload in files:
         suffix = Path(upload.filename or "").suffix.lower()
@@ -109,6 +136,7 @@ async def upload_images(
                 filepath=rel_path,
                 width=w, height=h, format=fmt,
                 file_hash=md5, phash=phash,
+                upload_batch_id=batch_id,
             )
             db.add(img)
             existing_hashes.add(md5)
@@ -146,6 +174,7 @@ async def upload_video(
     )
     existing_hashes = {row[0] for row in existing if row[0]}
 
+    batch_id = f"video_{Path(file.filename).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     added = 0
     for rel_path in keys:
         abs_path = resolve_filepath(rel_path)
@@ -162,6 +191,7 @@ async def upload_video(
             filepath=rel_path,
             width=w, height=h, format=fmt,
             file_hash=md5, phash=phash,
+            upload_batch_id=batch_id,
         )
         db.add(img)
         existing_hashes.add(md5)
@@ -190,6 +220,7 @@ async def upload_zip(
     existing_hashes = {row[0] for row in existing if row[0]}
 
     rel_paths = extract_zip_and_get_images(data, dataset_id)
+    batch_id = f"zip_{Path(file.filename).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     added = 0
     for rel_path in rel_paths:
         abs_path = resolve_filepath(rel_path)
@@ -205,6 +236,7 @@ async def upload_zip(
             filepath=rel_path,
             width=w, height=h, format=fmt,
             file_hash=md5, phash=phash,
+            upload_batch_id=batch_id,
         )
         db.add(img)
         existing_hashes.add(md5)
@@ -243,6 +275,7 @@ async def upload_zip_annotated(
     )
     existing_hashes = {row[0] for row in existing if row[0]}
 
+    batch_id = f"zip_ann_{Path(file.filename).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     task_id = str(uuid.uuid4())
     _task_store[task_id] = {"status": "pending", "result": None, "error": None}
 
@@ -257,6 +290,7 @@ async def upload_zip_annotated(
             result = await import_dataset_zip(
                 bg_session, dataset_id, zip_bytes, existing_hashes,
                 force_format=fmt.lower() if fmt else None,
+                upload_batch_id=batch_id,
             )
             await bg_session.commit()
             _task_store[task_id] = {"status": "done", "result": result, "error": None}
@@ -373,6 +407,7 @@ async def import_from_roboflow(
     )
     existing_hashes = {row[0] for row in existing if row[0]}
 
+    batch_id = f"roboflow_{req.project_id}_v{req.version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     task_id = str(uuid.uuid4())
     _task_store[task_id] = {"status": "pending", "result": None, "error": None}
 
@@ -400,6 +435,7 @@ async def import_from_roboflow(
             result = await import_dataset_zip(
                 bg_session, dataset_id, zip_bytes, existing_hashes,
                 force_format="coco",
+                upload_batch_id=batch_id,
             )
             await bg_session.commit()
             _task_store[task_id] = {"status": "done", "result": result, "error": None}

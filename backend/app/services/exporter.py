@@ -218,6 +218,7 @@ async def export_coco(
 
     split_buckets = _assign_splits(list(images), train_ratio, val_ratio, test_ratio)
     class_id_to_name = {cls.id: cls.name for cls in classes}
+    class_id_to_idx = {cls.id: i + 1 for i, cls in enumerate(classes)}
 
     text_files: dict[str, str] = {}
 
@@ -243,7 +244,7 @@ async def export_coco(
                 "date_created": datetime.now().isoformat(),
             },
             "categories": [
-                {"id": cls.id, "name": cls.name, "supercategory": "object"}
+                {"id": class_id_to_idx[cls.id], "name": cls.name, "supercategory": "object"}
                 for cls in classes
             ],
             "images": [],
@@ -268,7 +269,7 @@ async def export_coco(
                 coco["annotations"].append({
                     "id": ann_id,
                     "image_id": img.id,
-                    "category_id": ann.class_id,
+                    "category_id": class_id_to_idx.get(ann.class_id, 1),
                     "bbox": [round(x_px, 2), round(y_px, 2), round(w_px, 2), round(h_px, 2)],
                     "area": round(w_px * h_px, 2),
                     "iscrowd": 0,

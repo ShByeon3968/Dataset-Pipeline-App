@@ -7,6 +7,8 @@ export interface AutoLabelRequest {
   confidence_threshold?: number
   iou_threshold?: number
   overwrite?: boolean
+  skip_labeled?: boolean
+  upload_batch_id?: string | null
 }
 
 export interface AutoLabelRun {
