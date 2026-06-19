@@ -15,6 +15,7 @@ WHY YOLO-WORLD OVER SAM3:
   - More stable API
 """
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +23,12 @@ from PIL import Image as PILImage
 
 logger = logging.getLogger(__name__)
 
-MODEL_DIR = Path("./data/models")
+MODEL_DIR = Path(os.environ.get("HF_HOME", "./data/models"))
 MODEL_NAME = "yolov8x-worldv2.pt"
 
 # Global model cache (loaded once per process)
 _model = None
-
+_current_prompts = None
 
 def _get_model_path() -> str:
     """Return local model path if cached, else model name for auto-download."""
@@ -46,6 +47,7 @@ def _get_model():
 
     try:
         from ultralytics import YOLOWorld
+        import torch
     except ImportError as e:
         raise RuntimeError(
             "ultralytics is not installed or YOLOWorld is unavailable. "
@@ -54,6 +56,11 @@ def _get_model():
 
     model_path = _get_model_path()
     _model = YOLOWorld(model_path)
+    
+    if torch.cuda.is_available():
+        _model.to("cuda")
+        logger.info("YOLOWorld model explicitly moved to cuda")
+        
     logger.info("YOLOWorld model loaded from: %s", model_path)
 
     _cache_downloaded_model()
@@ -98,14 +105,18 @@ def predict_image(
         w, h = width/height (normalized 0~1)
         This matches what exporter.py expects for COCO/YOLO/VOC export.
     """
+    global _current_prompts
+    
     if not text_prompts:
         raise ValueError("text_prompts must not be empty")
 
     model = _get_model()
 
     # set_classes updates the text encoder embeddings for the given prompts.
-    # Must be called before every predict() when prompts change.
-    model.set_classes(text_prompts)
+    # We cache _current_prompts to avoid rebuilding text embeddings (which triggers CLIP encoding) on every image.
+    if _current_prompts != text_prompts:
+        model.set_classes(text_prompts)
+        _current_prompts = text_prompts
 
     results = model.predict(source=image_path, conf=confidence_threshold, verbose=False)
 

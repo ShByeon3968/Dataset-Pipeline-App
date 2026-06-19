@@ -7,13 +7,14 @@ import clsx from 'clsx'
 const navItems = [
   { to: '/', icon: Home, label: '홈', exact: true },
   { to: '/upload', icon: Upload, label: '1. 업로드' },
-  { to: '/labeling', icon: Tag, label: '2. 레이블링' },
-  { to: '/auto-label', icon: Bot, label: '3. AI 자동 레이블링' },
-  { to: '/analysis', icon: BarChart2, label: '4. 분석' },
-  { to: '/refinement', icon: Scissors, label: '5. 정제' },
-  { to: '/ontology', icon: GitMerge, label: '6. 온톨로지' },
-  { to: '/export', icon: Download, label: '7. 내보내기' },
-  { to: '/versioning', icon: GitBranch, label: '8. 버저닝' },
+  { to: '/synthetic-data', icon: Bot, label: '2. 합성데이터 생성 및 검증' },
+  { to: '/labeling', icon: Tag, label: '3. 레이블링' },
+  { to: '/auto-label', icon: Bot, label: '4. AI 자동 레이블링' },
+  { to: '/analysis', icon: BarChart2, label: '5. 분석' },
+  { to: '/refinement', icon: Scissors, label: '6. 정제' },
+  { to: '/ontology', icon: GitMerge, label: '7. 온톨로지' },
+  { to: '/export', icon: Download, label: '8. 내보내기' },
+  { to: '/versioning', icon: GitBranch, label: '9. 버저닝' },
 ]
 
 export default function Sidebar() {

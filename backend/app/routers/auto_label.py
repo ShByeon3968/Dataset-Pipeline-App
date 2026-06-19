@@ -20,7 +20,7 @@ settings = get_settings()
 # ── 스키마 ────────────────────────────────────────────────────────────────
 
 class AutoLabelRequest(BaseModel):
-    mode: Literal["yolo_world", "onnx"] = "yolo_world"
+    mode: Literal["yolo_world", "onnx", "locate_anything"] = "yolo_world"
     # YOLO-World 전용
     text_prompts: list[str] = Field(default=[], description="yolo_world 모드에서 필수")
     # ONNX 전용
@@ -148,7 +148,12 @@ async def _run_auto_label(
             processed = 0
             total_anns = 0
 
-            for img in images:
+            # Determine batch size: 16 for locate_anything, 1 for other modes
+            batch_size = 16 if mode == "locate_anything" else 1
+
+            for i in range(0, total, batch_size):
+                batch_imgs = images[i : i + batch_size]
+
                 # 취소 확인
                 async with shard_router.get_meta_session() as ms_check:
                     db_run = await ms_check.get(AutoLabelRun, run_id)
@@ -156,66 +161,81 @@ async def _run_auto_label(
                         return
 
                 try:
-                    abs_path = resolve_filepath(img.filepath)
-
-                    # ── 모드별 추론 분기 ──────────────────────────────
-                    if mode == "onnx" and onnx_meta is not None:
-                        from app.services.onnx_inference import run_inference
-                        detections = run_inference(
-                            model_id=onnx_model_id,
-                            file_path=onnx_meta.file_path,
-                            models_dir=settings.models_dir,
-                            architecture=onnx_meta.architecture,
-                            class_labels=onnx_labels,
-                            image_abs_path=abs_path,
-                            input_w=onnx_meta.input_width,
-                            input_h=onnx_meta.input_height,
-                            conf_threshold=confidence_threshold,
-                            iou_threshold=iou_threshold,
-                        )
+                    # ── 배치 추론 분기 ──────────────────────────────
+                    if mode == "locate_anything":
+                        from app.services.locate_anything_service import predict_images_la_batch
+                        batch_paths = [resolve_filepath(img.filepath) for img in batch_imgs]
+                        batch_detections = predict_images_la_batch(batch_paths, text_prompts)
                     else:
-                        from app.services.auto_label_service import predict_image
-                        detections = predict_image(abs_path, text_prompts, confidence_threshold)
+                        batch_detections = []
+                        img = batch_imgs[0]
+                        abs_path = resolve_filepath(img.filepath)
+                        if mode == "onnx" and onnx_meta is not None:
+                            from app.services.onnx_inference import run_inference
+                            detections = run_inference(
+                                model_id=onnx_model_id,
+                                file_path=onnx_meta.file_path,
+                                models_dir=settings.models_dir,
+                                architecture=onnx_meta.architecture,
+                                class_labels=onnx_labels,
+                                image_abs_path=abs_path,
+                                input_w=onnx_meta.input_width,
+                                input_h=onnx_meta.input_height,
+                                conf_threshold=confidence_threshold,
+                                iou_threshold=iou_threshold,
+                            )
+                        else:
+                            from app.services.auto_label_service import predict_image
+                            detections = predict_image(abs_path, text_prompts, confidence_threshold)
+                        batch_detections = [detections]
                     # ─────────────────────────────────────────────────
 
-                    for det in detections:
-                        cname = det["class_name"]
-                        if cname not in class_map:
-                            from app.services.class_service import get_or_create_class
-                            new_cls = await get_or_create_class(shard_session, dataset_id, cname)
-                            class_map[cname] = new_cls
+                    for idx, img in enumerate(batch_imgs):
+                        if idx >= len(batch_detections):
+                            processed += 1
+                            continue
+                        detections = batch_detections[idx]
 
-                        seg_json = None
-                        if det.get("segmentation"):
-                            seg_json = json.dumps(det["segmentation"])
+                        for det in detections:
+                            cname = det["class_name"]
+                            if cname not in class_map:
+                                from app.services.class_service import get_or_create_class
+                                new_cls = await get_or_create_class(shard_session, dataset_id, cname)
+                                class_map[cname] = new_cls
 
-                        ann = Annotation(
-                            image_id=img.id,
-                            class_id=class_map[cname].id,
-                            bbox_x=det["bbox"]["x"],
-                            bbox_y=det["bbox"]["y"],
-                            bbox_w=det["bbox"]["w"],
-                            bbox_h=det["bbox"]["h"],
-                            segmentation=seg_json,
-                            annotation_type="bbox",
-                            is_auto_generated=True,
-                            confidence=det["confidence"],
-                            source_prompt=json.dumps(text_prompts) if mode == "yolo_world" else None,
-                            auto_label_run_id=run_id,
-                        )
-                        shard_session.add(ann)
-                        total_anns += 1
+                            seg_json = None
+                            if det.get("segmentation"):
+                                seg_json = json.dumps(det["segmentation"])
+
+                            ann = Annotation(
+                                image_id=img.id,
+                                class_id=class_map[cname].id,
+                                bbox_x=det["bbox"]["x"],
+                                bbox_y=det["bbox"]["y"],
+                                bbox_w=det["bbox"]["w"],
+                                bbox_h=det["bbox"]["h"],
+                                segmentation=seg_json,
+                                annotation_type="bbox",
+                                is_auto_generated=True,
+                                confidence=det["confidence"],
+                                source_prompt=json.dumps(text_prompts) if mode in ("yolo_world", "locate_anything") else None,
+                                auto_label_run_id=run_id,
+                            )
+                            shard_session.add(ann)
+                            total_anns += 1
+
+                        processed += 1
 
                     await shard_session.commit()
 
                 except FileNotFoundError:
-                    logger.warning("이미지 파일 없음: %s", img.filepath)
+                    logger.warning("이미지 파일 찾기 실패")
+                    processed += len(batch_imgs)
                 except Exception as e:
-                    logger.error("이미지 %s 처리 오류: %s", img.id, e)
-                finally:
-                    processed += 1
+                    logger.exception("배치 처리 중 오류 발생")
+                    processed += len(batch_imgs)
 
-                if processed % 10 == 0 or processed == total:
+                if processed % 10 == 0 or processed == total or mode == "locate_anything":
                     async with shard_router.get_meta_session() as ms:
                         await ms.execute(
                             update(AutoLabelRun)
@@ -256,8 +276,8 @@ async def start_auto_label(
     if ds is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    if req.mode == "yolo_world" and not req.text_prompts:
-        raise HTTPException(status_code=422, detail="yolo_world 모드에서는 text_prompts가 필요합니다.")
+    if req.mode in ("yolo_world", "locate_anything") and not req.text_prompts:
+        raise HTTPException(status_code=422, detail=f"{req.mode} 모드에서는 text_prompts가 필요합니다.")
     if req.mode == "onnx" and req.onnx_model_id is None:
         raise HTTPException(status_code=422, detail="onnx 모드에서는 onnx_model_id가 필요합니다.")
 
@@ -281,6 +301,8 @@ async def start_auto_label(
 
     if req.mode == "onnx":
         model_name = f"onnx:{req.onnx_model_id}"
+    elif req.mode == "locate_anything":
+        model_name = "locate-anything"
     else:
         model_name = "yolo-world"
 
@@ -289,7 +311,7 @@ async def start_auto_label(
         model_name=model_name,
         confidence_threshold=req.confidence_threshold,
         iou_threshold=req.iou_threshold,
-        text_prompts=json.dumps(req.text_prompts) if req.mode == "yolo_world" else None,
+        text_prompts=json.dumps(req.text_prompts) if req.mode in ("yolo_world", "locate_anything") else None,
         onnx_model_id=req.onnx_model_id,
         status="pending",
         total_images=total_images,

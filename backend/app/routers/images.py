@@ -51,14 +51,23 @@ async def list_images(
     dataset_id: int,
     skip: int = 0,
     limit: int = 100,
+    has_annotations: bool | None = Query(None, description="어노테이션 유무 필터"),
     db: AsyncSession = Depends(get_sharded_db),
 ):
-    total = await db.scalar(
-        select(func.count()).select_from(Image).where(Image.dataset_id == dataset_id)
-    ) or 0
+    count_query = select(func.count()).select_from(Image).where(Image.dataset_id == dataset_id)
+    query = select(Image).where(Image.dataset_id == dataset_id)
+
+    if has_annotations is not None:
+        if has_annotations:
+            count_query = count_query.where(Image.annotations.any())
+            query = query.where(Image.annotations.any())
+        else:
+            count_query = count_query.where(~Image.annotations.any())
+            query = query.where(~Image.annotations.any())
+
+    total = await db.scalar(count_query) or 0
     result = await db.execute(
-        select(Image)
-        .where(Image.dataset_id == dataset_id)
+        query
         .order_by(Image.id)
         .offset(skip)
         .limit(limit)
