@@ -1,7 +1,7 @@
 import client from './client'
 
 export interface AutoLabelRequest {
-  mode?: 'yolo_world' | 'onnx'
+  mode?: 'yolo_world' | 'onnx' | 'locate_anything'
   text_prompts?: string[]
   onnx_model_id?: number | null
   confidence_threshold?: number

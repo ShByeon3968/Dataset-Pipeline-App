@@ -183,13 +183,25 @@ export default function LabelingPage() {
   const [globalIndex, setGlobalIndex] = useState(0)
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
   const [newClassName, setNewClassName] = useState('')
+  const [filterType, setFilterType] = useState<'all' | 'labeled' | 'unlabeled'>('all')
+
+  const handleFilterChange = (newFilter: 'all' | 'labeled' | 'unlabeled') => {
+    setFilterType(newFilter)
+    setGlobalIndex(0)
+  }
+
+  const hasAnnotationsFilter = useMemo(() => {
+    if (filterType === 'labeled') return true
+    if (filterType === 'unlabeled') return false
+    return undefined
+  }, [filterType])
 
   const page = useMemo(() => Math.floor(globalIndex / PAGE_SIZE), [globalIndex])
   const localIndex = useMemo(() => globalIndex % PAGE_SIZE, [globalIndex])
 
   const { data: imagesData, isFetching: fetchingImages } = useQuery({
-    queryKey: ['images', selectedDataset?.id, page],
-    queryFn: () => imagesApi.list(selectedDataset!.id, page * PAGE_SIZE, PAGE_SIZE),
+    queryKey: ['images', selectedDataset?.id, page, hasAnnotationsFilter],
+    queryFn: () => imagesApi.list(selectedDataset!.id, page * PAGE_SIZE, PAGE_SIZE, hasAnnotationsFilter),
     enabled: !!selectedDataset,
     placeholderData: (prev) => prev,
   })
@@ -277,8 +289,24 @@ export default function LabelingPage() {
 
   return (
     <div>
-      <h1 className="page-header">Labeling</h1>
-      <p className="page-subtitle">Draw bounding boxes and assign classes to images.</p>
+      <div className="flex justify-between items-end mb-4">
+        <div>
+          <h1 className="page-header">Labeling</h1>
+          <p className="page-subtitle">Draw bounding boxes and assign classes to images.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium text-gray-700">Filter:</label>
+          <select
+            value={filterType}
+            onChange={(e) => handleFilterChange(e.target.value as 'all' | 'labeled' | 'unlabeled')}
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+          >
+            <option value="all">All Images</option>
+            <option value="labeled">Labeled</option>
+            <option value="unlabeled">Unlabeled</option>
+          </select>
+        </div>
+      </div>
 
       {/* Legend */}
       <div className="flex items-center gap-4 mb-4 text-xs text-gray-500">

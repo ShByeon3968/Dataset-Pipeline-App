@@ -286,7 +286,7 @@ export default function AutoLabel() {
   const qc = useQueryClient()
 
   // ── 공통 상태 ──
-  const [mode, setMode] = useState<'yolo_world' | 'onnx'>('yolo_world')
+  const [mode, setMode] = useState<'yolo_world' | 'onnx' | 'locate_anything'>('yolo_world')
   const [confidence, setConfidence] = useState(0.25)
   const [iouThreshold, setIouThreshold] = useState(0.45)
   const [overwrite, setOverwrite] = useState(false)
@@ -337,7 +337,7 @@ export default function AutoLabel() {
     mutationFn: () =>
       autoLabelApi.startRun(selectedDataset!.id, {
         mode,
-        text_prompts: mode === 'yolo_world' ? textPrompts : [],
+        text_prompts: (mode === 'yolo_world' || mode === 'locate_anything') ? textPrompts : [],
         onnx_model_id: mode === 'onnx' ? selectedModelId! : undefined,
         confidence_threshold: confidence,
         iou_threshold: iouThreshold,
@@ -374,7 +374,7 @@ export default function AutoLabel() {
   const isRunning = latestRun?.status === 'pending' || latestRun?.status === 'running'
   const canStart =
     !isRunning && !startMut.isPending &&
-    (mode === 'yolo_world' ? textPrompts.length > 0 : selectedModelId !== null) &&
+    ((mode === 'yolo_world' || mode === 'locate_anything') ? textPrompts.length > 0 : selectedModelId !== null) &&
     (targetScope === 'all' || selectedBatchId !== null)
 
   if (!selectedDataset) {
@@ -398,7 +398,7 @@ export default function AutoLabel() {
       <div>
         <h1 className="page-header">AI 자동 레이블링</h1>
         <p className="page-subtitle">
-          텍스트 프롬프트(YOLO-World) 또는 커스텀 ONNX 모델로 바운딩 박스를 자동 생성합니다.
+          텍스트 프롬프트(YOLO-World, LocateAnything) 또는 커스텀 ONNX 모델로 바운딩 박스를 자동 생성합니다.
         </p>
 
         <div className="card mb-6">
@@ -414,6 +414,16 @@ export default function AutoLabel() {
               YOLO-World
             </button>
             <button
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${mode === 'locate_anything'
+                  ? 'bg-white shadow text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+                }`}
+              onClick={() => setMode('locate_anything')}
+            >
+              <Bot className="w-3.5 h-3.5" />
+              LocateAnything
+            </button>
+            <button
               className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${mode === 'onnx'
                   ? 'bg-white shadow text-blue-600'
                   : 'text-gray-500 hover:text-gray-700'
@@ -427,8 +437,8 @@ export default function AutoLabel() {
 
           <h2 className="text-sm font-semibold text-gray-700 mb-4">실행 설정</h2>
 
-          {/* YOLO-World: 텍스트 프롬프트 */}
-          {mode === 'yolo_world' && (
+          {/* YOLO-World / LocateAnything: 텍스트 프롬프트 */}
+          {(mode === 'yolo_world' || mode === 'locate_anything') && (
             <div className="mb-4">
               <label className="form-label mb-1 block">
                 탐지할 객체 (텍스트 프롬프트)
