@@ -63,9 +63,8 @@ def process_image_chunk(worker_id, gpu_id, image_files, input_dir, output_dir, p
                 output_path = os.path.join(output_dir, f"syn_{filename}")
                 output_image.save(output_path)
                 
-                if idx % 10 == 0 or not is_warmed_up:
-                    print(f"[Worker {worker_id}] Progress: {idx}/{len(image_files)} ({filename})")
-                    
+                print(f"[Worker {worker_id}] Progress: {idx}/{len(image_files)} ({filename})")
+                print("__IMAGE_DONE__")
                 is_warmed_up = True
             except Exception as e:
                 print(f"[Worker {worker_id}] Error processing {filename}: {e}")
@@ -73,6 +72,7 @@ def process_image_chunk(worker_id, gpu_id, image_files, input_dir, output_dir, p
         print(f"[Worker {worker_id}] Done!")
     except Exception as e:
         print(f"[Worker {worker_id}] Fatal Error: {e}")
+        sys.exit(1)
 
 def run_flux_generation(input_dir: str, output_dir: str, prompt: str, gpus: list, strength: float, guidance_scale: float, num_inference_steps: int, seed: int, use_compile: bool, queue):
     class QueueWriter:
@@ -115,7 +115,10 @@ def run_flux_generation(input_dir: str, output_dir: str, prompt: str, gpus: list
 
         for p in processes:
             p.join()
+            if p.exitcode != 0:
+                raise Exception(f"Worker process failed with exit code {p.exitcode}")
             
         print("All processes completed.")
     except Exception as e:
         print(f"Error in Flux Generation: {e}")
+        raise e

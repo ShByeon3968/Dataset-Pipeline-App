@@ -50,3 +50,10 @@ onnxruntime>=1.18.0
 
 # VLM (LocateAnything-3B)
 git+https://github.com/NVlabs/Eagle.git#subdirectory=Embodied
+
+# GenAI (Flux & Qwen)
+git+https://github.com/huggingface/diffusers.git
+transformers>=4.45.0
+accelerate>=0.31.0
+sentencepiece
+protobuf

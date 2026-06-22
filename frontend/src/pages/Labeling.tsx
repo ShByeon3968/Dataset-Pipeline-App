@@ -184,6 +184,13 @@ export default function LabelingPage() {
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
   const [newClassName, setNewClassName] = useState('')
   const [filterType, setFilterType] = useState<'all' | 'labeled' | 'unlabeled'>('all')
+  const [selectedBatchId, setSelectedBatchId] = useState<string>('all')
+
+  const { data: batchesData } = useQuery({
+    queryKey: ['batches', selectedDataset?.id],
+    queryFn: () => imagesApi.getBatches(selectedDataset!.id),
+    enabled: !!selectedDataset,
+  })
 
   const handleFilterChange = (newFilter: 'all' | 'labeled' | 'unlabeled') => {
     setFilterType(newFilter)
@@ -200,8 +207,14 @@ export default function LabelingPage() {
   const localIndex = useMemo(() => globalIndex % PAGE_SIZE, [globalIndex])
 
   const { data: imagesData, isFetching: fetchingImages } = useQuery({
-    queryKey: ['images', selectedDataset?.id, page, hasAnnotationsFilter],
-    queryFn: () => imagesApi.list(selectedDataset!.id, page * PAGE_SIZE, PAGE_SIZE, hasAnnotationsFilter),
+    queryKey: ['images', selectedDataset?.id, page, hasAnnotationsFilter, selectedBatchId],
+    queryFn: () => imagesApi.list(
+      selectedDataset!.id, 
+      page * PAGE_SIZE, 
+      PAGE_SIZE, 
+      hasAnnotationsFilter,
+      selectedBatchId === 'all' ? undefined : selectedBatchId
+    ),
     enabled: !!selectedDataset,
     placeholderData: (prev) => prev,
   })
@@ -304,6 +317,20 @@ export default function LabelingPage() {
             <option value="all">All Images</option>
             <option value="labeled">Labeled</option>
             <option value="unlabeled">Unlabeled</option>
+          </select>
+
+          <label className="text-sm font-medium text-gray-700 ml-4">Batch:</label>
+          <select
+            value={selectedBatchId}
+            onChange={(e) => { setSelectedBatchId(e.target.value); setGlobalIndex(0); }}
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white max-w-xs"
+          >
+            <option value="all">All Batches</option>
+            {batchesData?.items.map(b => (
+              <option key={b.batch_id || 'none'} value={b.batch_id || 'none'}>
+                {b.batch_id?.startsWith('synthetic_') ? `🤖 ${b.batch_id}` : `📂 ${b.batch_id || 'Unknown'}`} ({b.count})
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -487,7 +514,6 @@ export default function LabelingPage() {
                       className="w-2.5 h-2.5 rounded-full shrink-0 ring-1"
                       style={{
                         background: ann.class_color ?? '#94a3b8',
-                        ringColor: 'transparent',
                       }}
                     />
 

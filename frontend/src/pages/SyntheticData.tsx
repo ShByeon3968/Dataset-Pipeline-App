@@ -206,7 +206,7 @@ export default function SyntheticData() {
                             className={clsx("px-6 py-2.5 text-sm font-medium border-b-2 transition-colors",
                                 activeTab === 'qwen' ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")}
                         >
-                            Qwen (Legacy)
+                            Qwen (화각 변화 특화)
                         </button>
                         <button
                             onClick={() => setActiveTab('flux')}
@@ -263,13 +263,24 @@ export default function SyntheticData() {
                             {genLog || "대기 중..."}
                         </div>
                         {['pending', 'preparing', 'running'].includes(genStatus) && (
-                            <div className="w-full bg-gray-700 rounded-full h-1.5 mt-2 overflow-hidden">
-                                <div className="bg-blue-500 h-1.5 rounded-full animate-pulse w-full"></div>
-                            </div>
+                            <>
+                                <div className="w-full bg-gray-700 rounded-full h-2.5 mt-3 overflow-hidden border border-gray-600">
+                                    <div 
+                                      className="bg-blue-500 h-2.5 rounded-full transition-all duration-300 ease-out" 
+                                      style={{ width: `${genResult?.progress || 0}%` }}
+                                    ></div>
+                                </div>
+                                {genResult?.progress != null && (
+                                    <div className="text-right text-xs text-blue-300 mt-1">
+                                        {genResult.progress}% 완료
+                                    </div>
+                                )}
+                            </>
                         )}
                         {genResult && genResult.output_dir && (
                             <div className="text-green-300 mt-2 text-xs">
-                                저장 완료: {genResult.output_dir}
+                                생성 완료: {genResult.output_dir}
+                                {genResult.batch_id && <span className="block mt-1">DB 배치 등록 완료: {genResult.batch_id}</span>}
                             </div>
                         )}
                     </div>

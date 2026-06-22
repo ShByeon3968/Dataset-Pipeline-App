@@ -5,6 +5,7 @@ import asyncio
 import threading
 import multiprocessing as mp
 from datetime import datetime
+from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, List
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -12,7 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.sharding.router import get_sharded_db
+from app.sharding.router import shard_router
 from app.models import Image
 from app.services.file_handler import resolve_filepath
 from app.core.config import get_settings
@@ -50,11 +51,20 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다.")
     return info
 
-def _queue_reader(queue, task_id, store):
+def _queue_reader(queue, task_id, store, total_images=None):
+    completed = 0
     while True:
         msg = queue.get()
         if msg is None: # Sentinel value to stop
             break
+            
+        if "__IMAGE_DONE__" in msg:
+            completed += 1
+            if total_images:
+                progress = min(100, int((completed / total_images) * 100))
+                store[task_id]["result"]["progress"] = progress
+            continue
+            
         store[task_id]["last_log"] = msg
         if "logs" not in store[task_id]["result"]:
             store[task_id]["result"]["logs"] = []
@@ -62,27 +72,38 @@ def _queue_reader(queue, task_id, store):
         # keep only last 100 logs
         store[task_id]["result"]["logs"] = store[task_id]["result"]["logs"][-100:]
 
-async def _run_generation(task_id: str, req: GenerateRequest, db: AsyncSession):
+async def _run_generation(task_id: str, req: GenerateRequest):
     queue = mp.Queue()
     _task_store[task_id]["result"] = {"logs": []}
     
     # Start queue reader thread
-    reader_thread = threading.Thread(target=_queue_reader, args=(queue, task_id, _task_store))
-    reader_thread.start()
+    total_images = 0
+    # we'll restart reader_thread later when total_images is known, 
+    # or just initialize it after getting images?
+    # Wait, we can't get total_images until DB query.
+    # Let's move reader_thread.start() after we know len(images).
 
     try:
         _task_store[task_id]["status"] = "preparing"
         
-        query = select(Image).where(Image.dataset_id == req.dataset_id)
-        if req.batch_id:
-            query = query.where(Image.upload_batch_id == req.batch_id)
-            
-        result = await db.execute(query)
-        images = result.scalars().all()
+        db = await shard_router.get_session_for_dataset(req.dataset_id)
+        try:
+            query = select(Image).where(Image.dataset_id == req.dataset_id)
+            if req.batch_id:
+                query = query.where(Image.upload_batch_id == req.batch_id)
+                
+            result = await db.execute(query)
+            images = result.scalars().all()
+        finally:
+            await db.close()
         
         if not images:
             raise Exception("선택된 데이터셋/배치에 이미지가 없습니다.")
             
+        total_images = len(images)
+        reader_thread = threading.Thread(target=_queue_reader, args=(queue, task_id, _task_store, total_images))
+        reader_thread.start()
+        
         base_dir = os.path.abspath(os.path.join("data", "synthetic", task_id))
         input_dir = os.path.join(base_dir, "input")
         output_dir = os.path.join(base_dir, "output")
@@ -113,9 +134,55 @@ async def _run_generation(task_id: str, req: GenerateRequest, db: AsyncSession):
         else:
             raise Exception("지원하지 않는 모델 타입입니다.")
             
+        # Ingest synthetic images into DB
+        from app.services.file_handler import (
+            calculate_md5_bytes, calculate_phash, get_image_dimensions,
+            get_file_format, save_image_to_storage
+        )
+        
+        batch_id = f"synthetic_{req.model_type}_{task_id}"
+        db = await shard_router.get_session_for_dataset(req.dataset_id)
+        try:
+            existing = await db.execute(
+                select(Image.file_hash).where(Image.dataset_id == req.dataset_id)
+            )
+            existing_hashes = {row[0] for row in existing if row[0]}
+            
+            for fname in os.listdir(output_dir):
+                fpath = os.path.join(output_dir, fname)
+                if not os.path.isfile(fpath): continue
+                
+                with open(fpath, "rb") as f:
+                    data = f.read()
+                    
+                md5 = calculate_md5_bytes(data)
+                if md5 in existing_hashes: continue
+                
+                abs_path, key = save_image_to_storage(data, fname, req.dataset_id)
+                w, h = get_image_dimensions(abs_path)
+                phash = calculate_phash(abs_path)
+                fmt = get_file_format(abs_path)
+                
+                img = Image(
+                    dataset_id=req.dataset_id,
+                    filename=Path(abs_path).name,
+                    filepath=key,
+                    width=w, height=h, format=fmt,
+                    file_hash=md5, phash=phash,
+                    upload_batch_id=batch_id,
+                )
+                db.add(img)
+                existing_hashes.add(md5)
+                
+            await db.commit()
+        finally:
+            await db.close()
+            
         _task_store[task_id]["status"] = "done"
         _task_store[task_id]["result"]["output_dir"] = output_dir
         _task_store[task_id]["result"]["input_dir"] = input_dir
+        _task_store[task_id]["result"]["progress"] = 100
+        _task_store[task_id]["result"]["batch_id"] = batch_id
             
     except Exception as e:
         _task_store[task_id]["status"] = "error"
@@ -127,19 +194,18 @@ async def _run_generation(task_id: str, req: GenerateRequest, db: AsyncSession):
 @router.post("/generate", status_code=202)
 async def generate_synthetic_data(
     req: GenerateRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_sharded_db)
+    background_tasks: BackgroundTasks
 ):
     task_id = str(uuid.uuid4())
     _task_store[task_id] = {
         "status": "pending", 
-        "result": {}, 
+        "result": {"progress": 0}, 
         "error": None,
         "last_log": "",
         "req": req.model_dump()
     }
     
-    background_tasks.add_task(_run_generation, task_id, req, db)
+    background_tasks.add_task(_run_generation, task_id, req)
     return {"task_id": task_id, "status": "pending"}
 
 
@@ -147,7 +213,7 @@ async def _run_evaluation(eval_task_id: str, gen_task_id: str, eval_type: str):
     queue = mp.Queue()
     _task_store[eval_task_id]["result"] = {"logs": []}
     
-    reader_thread = threading.Thread(target=_queue_reader, args=(queue, eval_task_id, _task_store))
+    reader_thread = threading.Thread(target=_queue_reader, args=(queue, eval_task_id, _task_store, None))
     reader_thread.start()
 
     try:

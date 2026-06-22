@@ -52,6 +52,7 @@ async def list_images(
     skip: int = 0,
     limit: int = 100,
     has_annotations: bool | None = Query(None, description="어노테이션 유무 필터"),
+    batch_id: str | None = Query(None, description="특정 배치의 이미지만 필터링"),
     db: AsyncSession = Depends(get_sharded_db),
 ):
     count_query = select(func.count()).select_from(Image).where(Image.dataset_id == dataset_id)
@@ -64,6 +65,10 @@ async def list_images(
         else:
             count_query = count_query.where(~Image.annotations.any())
             query = query.where(~Image.annotations.any())
+
+    if batch_id is not None:
+        count_query = count_query.where(Image.upload_batch_id == batch_id)
+        query = query.where(Image.upload_batch_id == batch_id)
 
     total = await db.scalar(count_query) or 0
     result = await db.execute(

@@ -1,0 +1,12 @@
+data/models
+data/uploads
+data/exports
+data/embeddings
+.env
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.github

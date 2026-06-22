@@ -2,10 +2,13 @@ import client from './client'
 import type { Image } from '../types'
 
 export const imagesApi = {
-  list: (datasetId: number, skip = 0, limit = 100, hasAnnotations?: boolean) => {
+  list: (datasetId: number, skip = 0, limit = 100, hasAnnotations?: boolean, batchId?: string) => {
     let url = `/datasets/${datasetId}/images?skip=${skip}&limit=${limit}`;
     if (hasAnnotations !== undefined) {
       url += `&has_annotations=${hasAnnotations}`;
+    }
+    if (batchId) {
+      url += `&batch_id=${encodeURIComponent(batchId)}`;
     }
     return client.get<{ items: Image[]; total: number }>(url).then(r => r.data);
   },
