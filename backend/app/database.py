@@ -43,5 +43,16 @@ async def get_db() -> AsyncSession:
 
 async def create_tables():
     """애플리케이션 시작 시 테이블 생성 (개발 환경)"""
+    from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Idempotent schema migrations for meta DB
+        _META_MIGRATIONS = [
+            "ALTER TABLE dataset_versions ADD COLUMN IF NOT EXISTS snapshot_path VARCHAR(500)",
+        ]
+        for stmt in _META_MIGRATIONS:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass
+

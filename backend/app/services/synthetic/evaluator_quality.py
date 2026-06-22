@@ -91,5 +91,13 @@ def run_quality_eval(target_dir: str, use_gpu: bool, queue):
         print(f"Average BRISQUE Score : {avg_brisque:.4f}")
         print(f"Average Sharpness Score: {avg_sharpness:.4f}")
         print("="*60)
+
+        metrics = {
+            "avg_brisque": float(avg_brisque),
+            "avg_sharpness": float(avg_sharpness),
+            "total_images": len(results),
+            "details": results
+        }
+        queue.put({"__METRICS__": metrics})
     except Exception as e:
         print(f"Error in Quality Eval: {e}")

@@ -21,6 +21,9 @@ export const imagesApi = {
   get: (datasetId: number, imageId: number) =>
     client.get<Image>(`/datasets/${datasetId}/images/${imageId}`).then(r => r.data),
 
+  getByFilename: (datasetId: number, filename: string) =>
+    client.get<Image>(`/datasets/${datasetId}/images/by-filename/${encodeURIComponent(filename)}`).then(r => r.data),
+
   getFileUrl: (datasetId: number, imageId: number) =>
     `/api/v1/datasets/${datasetId}/images/${imageId}/file`,
 

@@ -1,6 +1,17 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'react-hot-toast'
+import ReactFlow, {
+  Controls,
+  Background,
+  MiniMap,
+  Node,
+  Edge,
+  Handle,
+  Position,
+  MarkerType
+} from 'reactflow'
+import 'reactflow/dist/style.css'
 import { versionsApi } from '../api/versions'
 import { useAppStore } from '../store'
 import type { DatasetVersion, LineageNode, LineageEdge } from '../types'
@@ -35,9 +46,11 @@ function DiffChip({ label, value, color }: { label: string; value: number; color
 function VersionCard({
   ver,
   onDelete,
+  onRollback,
 }: {
   ver: DatasetVersion
   onDelete: (id: number) => void
+  onRollback: (ver: DatasetVersion) => void
 }) {
   const [open, setOpen] = useState(false)
   const date = new Date(ver.created_at).toLocaleString('ko-KR')
@@ -68,16 +81,30 @@ function VersionCard({
             <DiffChip label="✏️" value={ver.modified_labels} color="text-yellow-600" />
           </div>
           <span className="text-xs text-gray-400">{date}</span>
-          <button
-            onClick={e => {
-              e.stopPropagation()
-              onDelete(ver.id)
-            }}
-            className="text-gray-300 hover:text-red-400 transition-colors text-sm"
-            title="버전 삭제"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            {ver.has_snapshot && (
+              <button
+                onClick={e => {
+                  e.stopPropagation()
+                  onRollback(ver)
+                }}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded hover:bg-amber-100 transition-colors"
+                title="이 버전으로 롤백"
+              >
+                ↩ 롤백
+              </button>
+            )}
+            <button
+              onClick={e => {
+                e.stopPropagation()
+                onDelete(ver.id)
+              }}
+              className="text-gray-300 hover:text-red-400 transition-colors text-sm"
+              title="버전 삭제"
+            >
+              ✕
+            </button>
+          </div>
           <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>
         </div>
       </div>
@@ -133,8 +160,43 @@ function VersionCard({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 리니지 그래프 (SVG 기반 간이 DAG)
+// 리니지 그래프 (React Flow 기반)
 // ─────────────────────────────────────────────────────────────────────────────
+
+function DatasetVersionNode({ data }: { data: any }) {
+  return (
+    <div className="bg-blue-50 border-2 border-blue-500 rounded-lg p-3 w-48 shadow-sm hover:shadow-md transition-shadow">
+      <Handle type="target" position={Position.Top} className="w-2 h-2 !bg-blue-500" />
+      <div className="text-sm font-bold text-blue-700 text-center truncate" title={data.label}>
+        {data.label}
+      </div>
+      <div className="text-xs text-blue-400 text-center mt-1">
+        {new Date(data.created_at).toLocaleDateString('ko-KR')}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="w-2 h-2 !bg-blue-500" />
+    </div>
+  )
+}
+
+function ModelVersionNode({ data }: { data: any }) {
+  return (
+    <div className="bg-green-50 border-2 border-green-500 rounded-lg p-3 w-48 shadow-sm hover:shadow-md transition-shadow">
+      <Handle type="target" position={Position.Top} className="w-2 h-2 !bg-green-500" />
+      <div className="text-sm font-bold text-green-700 text-center truncate" title={data.label}>
+        {data.label}
+      </div>
+      <div className="text-xs text-green-500 text-center mt-1">
+        {new Date(data.created_at).toLocaleDateString('ko-KR')}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="w-2 h-2 !bg-green-500" />
+    </div>
+  )
+}
+
+const nodeTypes = {
+  dataset_version: DatasetVersionNode,
+  model_version: ModelVersionNode,
+}
 
 function LineageGraphView({ datasetId }: { datasetId: number }) {
   const { data, isLoading, error } = useQuery({
@@ -142,126 +204,73 @@ function LineageGraphView({ datasetId }: { datasetId: number }) {
     queryFn: () => versionsApi.getLineage(datasetId),
   })
 
+  const { nodes, edges } = useMemo(() => {
+    if (!data) return { nodes: [], edges: [] }
+
+    const dvNodes = data.nodes.filter(n => n.type === 'dataset_version')
+    const mvNodes = data.nodes.filter(n => n.type === 'model_version')
+
+    const rfNodes: Node[] = []
+    const rfEdges: Edge[] = []
+
+    // 간단한 레이아웃: 데이터셋 버전은 왼쪽 열, 모델 버전은 오른쪽 열
+    dvNodes.forEach((n, i) => {
+      rfNodes.push({
+        id: String(n.id),
+        type: 'dataset_version',
+        position: { x: 50, y: 50 + i * 120 },
+        data: { label: n.label, created_at: n.created_at },
+      })
+    })
+
+    mvNodes.forEach((n, i) => {
+      rfNodes.push({
+        id: String(n.id),
+        type: 'model_version',
+        position: { x: 350, y: 50 + i * 120 },
+        data: { label: n.label, created_at: n.created_at },
+      })
+    })
+
+    data.edges.forEach((e, i) => {
+      rfEdges.push({
+        id: `e-${e.source}-${e.target}-${i}`,
+        source: String(e.source),
+        target: String(e.target),
+        label: e.label,
+        type: 'smoothstep',
+        animated: true,
+        style: { stroke: '#94a3b8', strokeWidth: 2 },
+        labelStyle: { fill: '#64748b', fontSize: 11, fontWeight: 500 },
+        labelBgStyle: { fill: '#f8fafc', fillOpacity: 0.9 },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: '#94a3b8',
+        },
+      })
+    })
+
+    return { nodes: rfNodes, edges: rfEdges }
+  }, [data])
+
   if (isLoading) return <div className="text-center py-12 text-gray-400">리니지 로딩 중…</div>
   if (error || !data) return <div className="text-center py-12 text-red-400">리니지 로드 실패</div>
   if (data.nodes.length === 0)
     return <div className="text-center py-12 text-gray-400">버전이 없습니다. 첫 스냅샷을 찍어보세요.</div>
 
-  // 간단한 레이아웃: dataset_version은 행별로 위→아래, model_version은 우측에 배치
-  const dvNodes = data.nodes.filter(n => n.type === 'dataset_version')
-  const mvNodes = data.nodes.filter(n => n.type === 'model_version')
-
-  const NODE_W = 180
-  const NODE_H = 50
-  const H_GAP = 220
-  const V_GAP = 80
-
-  const posMap = new Map<number, { x: number; y: number; type: string }>()
-
-  dvNodes.forEach((n, i) => {
-    posMap.set(n.id, { x: 40, y: 40 + i * V_GAP, type: 'dataset_version' })
-  })
-  mvNodes.forEach((n, i) => {
-    posMap.set(n.id, {
-      x: 40 + H_GAP,
-      y: 40 + i * V_GAP,
-      type: 'model_version',
-    })
-  })
-
-  const totalH = Math.max(
-    (dvNodes.length || 1) * V_GAP + 40,
-    (mvNodes.length || 1) * V_GAP + 40,
-  ) + 60
-
-  const totalW = mvNodes.length > 0 ? 40 + H_GAP + NODE_W + 40 : 40 + NODE_W + 40
-
   return (
-    <div className="overflow-auto rounded-lg border border-gray-200 bg-white p-4">
-      <svg width={totalW} height={totalH} xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8" />
-          </marker>
-        </defs>
-
-        {/* 엣지 */}
-        {data.edges.map((e: LineageEdge, i: number) => {
-          const s = posMap.get(e.source)
-          const t = posMap.get(e.target)
-          if (!s || !t) return null
-          const x1 = s.x + NODE_W
-          const y1 = s.y + NODE_H / 2
-          const x2 = t.x
-          const y2 = t.y + NODE_H / 2
-          const mx = (x1 + x2) / 2
-          return (
-            <g key={i}>
-              <path
-                d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
-                fill="none"
-                stroke="#94a3b8"
-                strokeWidth={1.5}
-                markerEnd="url(#arrow)"
-              />
-              {e.label && (
-                <text
-                  x={mx}
-                  y={Math.min(y1, y2) + Math.abs(y2 - y1) / 2}
-                  fontSize={10}
-                  fill="#94a3b8"
-                  textAnchor="middle"
-                >
-                  {e.label}
-                </text>
-              )}
-            </g>
-          )
-        })}
-
-        {/* 노드 */}
-        {data.nodes.map((n: LineageNode) => {
-          const pos = posMap.get(n.id)
-          if (!pos) return null
-          const isDV = n.type === 'dataset_version'
-          const fill = isDV ? '#eff6ff' : '#f0fdf4'
-          const stroke = isDV ? '#3b82f6' : '#22c55e'
-          const textColor = isDV ? '#1d4ed8' : '#15803d'
-          return (
-            <g key={`${n.type}-${n.id}`}>
-              <rect
-                x={pos.x}
-                y={pos.y}
-                width={NODE_W}
-                height={NODE_H}
-                rx={8}
-                fill={fill}
-                stroke={stroke}
-                strokeWidth={1.5}
-              />
-              <text
-                x={pos.x + NODE_W / 2}
-                y={pos.y + 18}
-                fontSize={11}
-                fontWeight="600"
-                fill={textColor}
-                textAnchor="middle"
-              >
-                {n.label.length > 22 ? n.label.slice(0, 20) + '…' : n.label}
-              </text>
-              <text
-                x={pos.x + NODE_W / 2}
-                y={pos.y + 34}
-                fontSize={9}
-                fill="#94a3b8"
-                textAnchor="middle"
-              >
-                {new Date(n.created_at).toLocaleDateString('ko-KR')}
-              </text>
-            </g>
-          )
-        })}
-      </svg>
+    <div className="w-full h-[600px] border border-gray-200 rounded-xl bg-gray-50 shadow-inner overflow-hidden">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        fitView
+        attributionPosition="bottom-right"
+      >
+        <Background color="#cbd5e1" gap={16} />
+        <Controls className="bg-white shadow-md rounded-lg" />
+        <MiniMap zoomable pannable className="rounded-lg shadow-md border border-gray-200" />
+      </ReactFlow>
     </div>
   )
 }
@@ -404,6 +413,114 @@ function CreateVersionModal({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 롤백 확인 모달
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RollbackModal({
+  ver,
+  datasetId,
+  onClose,
+}: {
+  ver: DatasetVersion
+  datasetId: number
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [result, setResult] = useState<{
+    restored_images: number
+    restored_annotations: number
+    missing_physical_files: string[]
+  } | null>(null)
+
+  const rollbackMut = useMutation({
+    mutationFn: () => versionsApi.rollback(datasetId, ver.id),
+    onSuccess: (data) => {
+      setResult(data)
+      qc.invalidateQueries({ queryKey: ['versions', datasetId] })
+      if (data.missing_physical_files.length === 0) {
+        toast.success(`"${ver.version_name}"으로 완전 복구되었습니다.`)
+      } else {
+        toast(`복구 완료 (${data.missing_physical_files.length}개 파일 누락)`, { icon: '⚠️' })
+      }
+    },
+    onError: (e: Error) => toast.error(`롤백 실패: ${e.message}`),
+  })
+
+  if (result) {
+    return (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
+        <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="text-center">
+            <div className="text-3xl mb-2">{result.missing_physical_files.length === 0 ? '✅' : '⚠️'}</div>
+            <h2 className="text-lg font-bold text-gray-800">롤백 완료</h2>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="bg-blue-50 rounded-lg p-3 text-center">
+              <div className="text-xl font-bold text-blue-600">{result.restored_images}</div>
+              <div className="text-gray-500 mt-0.5">이미지 복구</div>
+            </div>
+            <div className="bg-indigo-50 rounded-lg p-3 text-center">
+              <div className="text-xl font-bold text-indigo-600">{result.restored_annotations}</div>
+              <div className="text-gray-500 mt-0.5">라벨 복구</div>
+            </div>
+          </div>
+          {result.missing_physical_files.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <p className="text-xs font-medium text-amber-700 mb-1">⚠️ 물리 파일 없음 ({result.missing_physical_files.length}개)</p>
+              <div className="max-h-24 overflow-y-auto">
+                {result.missing_physical_files.map(f => (
+                  <div key={f} className="text-xs text-amber-600 font-mono truncate">{f}</div>
+                ))}
+              </div>
+            </div>
+          )}
+          <button onClick={onClose} className="w-full py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors">
+            닫기
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="text-center">
+          <div className="text-4xl mb-2">↩</div>
+          <h2 className="text-lg font-bold text-gray-800">버전 롤백 확인</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            <span className="font-semibold text-gray-700">"{ver.version_name}"</span> 버전으로 되돌립니다.
+          </p>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-700 space-y-1">
+          <p className="font-semibold">⚠️ 주의사항</p>
+          <ul className="list-disc list-inside space-y-0.5 text-xs">
+            <li>현재 데이터셋의 모든 이미지와 라벨이 해당 버전 상태로 교체됩니다.</li>
+            <li>물리 파일(이미지 원본)은 보존되어 있어 완전 복구가 가능합니다.</li>
+            <li>이 작업 후 현재 변경사항은 되돌릴 수 없습니다.</li>
+          </ul>
+        </div>
+        <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-700">
+          <span className="font-medium">복구 대상:</span> 이미지 {ver.image_count}장 / 어노테이션 {ver.annotation_count}개 / 클래스 {ver.class_count}종
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-2 border border-gray-200 hover:bg-gray-50 rounded-lg text-sm font-medium transition-colors">
+            취소
+          </button>
+          <button
+            onClick={() => rollbackMut.mutate()}
+            disabled={rollbackMut.isPending}
+            className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {rollbackMut.isPending ? '복구 중…' : '롤백 실행'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 메인 Versioning 페이지
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -415,6 +532,7 @@ export default function Versioning() {
   const [tab, setTab] = useState<Tab>('versions')
   const [showCreate, setShowCreate] = useState(false)
   const [branchFilter, setBranchFilter] = useState('')
+  const [rollbackTarget, setRollbackTarget] = useState<DatasetVersion | null>(null)
 
   const datasetId = selectedDataset?.id ?? 0
 
@@ -432,6 +550,18 @@ export default function Versioning() {
       qc.invalidateQueries({ queryKey: ['lineage', datasetId] })
     },
     onError: () => toast.error('삭제 실패'),
+  })
+
+  const gcMut = useMutation({
+    mutationFn: () => versionsApi.gc(datasetId),
+    onSuccess: (data) => {
+      if (data.deleted_count === 0) {
+        toast.success('정리할 고아 파일이 없습니다.')
+      } else {
+        toast.success(`${data.deleted_count}개 파일 삭제 완료 (${data.freed_mb} MB 확보)`)
+      }
+    },
+    onError: () => toast.error('GC 실패'),
   })
 
   if (!selectedDataset) {
@@ -458,12 +588,26 @@ export default function Versioning() {
             {selectedDataset.name} — 데이터셋 버전 관리 및 모델 연결 추적
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
-        >
-          + 스냅샷 생성
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (window.confirm('DB에 없는 고아 파일을 삭제합니다. 계속할까요?')) {
+                gcMut.mutate()
+              }
+            }}
+            disabled={gcMut.isPending}
+            className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+            title="uploads 폴더의 고아 파일 일괄 삭제"
+          >
+            {gcMut.isPending ? '정리 중…' : '🗑️ 파일 정리 (GC)'}
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+          >
+            + 스냅샷 생성
+          </button>
+        </div>
       </div>
 
       {/* 탭 */}
@@ -540,6 +684,7 @@ export default function Versioning() {
                   if (window.confirm(`버전 "${v.version_name}"을 삭제하시겠습니까?`))
                     deleteMut.mutate(id)
                 }}
+                onRollback={ver => setRollbackTarget(ver)}
               />
             ))}
           </div>
@@ -561,6 +706,14 @@ export default function Versioning() {
           datasetId={datasetId}
           versions={versions}
           onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      {rollbackTarget && (
+        <RollbackModal
+          ver={rollbackTarget}
+          datasetId={datasetId}
+          onClose={() => setRollbackTarget(null)}
         />
       )}
     </div>

@@ -28,10 +28,10 @@ class ImageDirectoryDataset(Dataset):
             img = Image.open(img_path).convert("RGB")
             if self.transform:
                 img = self.transform(img)
-            return img
+            return {"images": img}
         except Exception as e:
             print(f"Warning: {img_path} ({e})")
-            return torch.zeros((3, 299, 299))
+            return {"images": torch.zeros((3, 299, 299))}
 
 def run_domain_gap_eval(real_dir: str, syn_dir: str, batch_size: int, use_gpu: bool, queue):
     class QueueWriter:
@@ -95,5 +95,11 @@ def run_domain_gap_eval(real_dir: str, syn_dir: str, batch_size: int, use_gpu: b
         print(f"Fréchet Inception Distance (FID): {fid_score.item():.4f}")
         print(f"Kernel Inception Distance (KID):  {kid_score.item():.4f}")
         print("=" * 65)
+
+        metrics = {
+            "fid": float(fid_score.item()),
+            "kid": float(kid_score.item())
+        }
+        queue.put({"__METRICS__": metrics})
     except Exception as e:
         print(f"Error in Domain Gap Eval: {e}")

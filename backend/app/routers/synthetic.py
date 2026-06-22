@@ -41,7 +41,9 @@ class GenerateRequest(BaseModel):
     seed: Optional[int] = 42
 
 class EvaluateRequest(BaseModel):
-    task_id: str
+    dataset_id: int
+    real_batch_id: Optional[str] = None
+    synthetic_batch_id: str
     eval_type: str
 
 @router.get("/status/{task_id}")
@@ -58,19 +60,24 @@ def _queue_reader(queue, task_id, store, total_images=None):
         if msg is None: # Sentinel value to stop
             break
             
-        if "__IMAGE_DONE__" in msg:
-            completed += 1
-            if total_images:
-                progress = min(100, int((completed / total_images) * 100))
-                store[task_id]["result"]["progress"] = progress
+        if isinstance(msg, dict) and "__METRICS__" in msg:
+            store[task_id]["result"]["metrics"] = msg["__METRICS__"]
             continue
             
-        store[task_id]["last_log"] = msg
-        if "logs" not in store[task_id]["result"]:
-            store[task_id]["result"]["logs"] = []
-        store[task_id]["result"]["logs"].append(msg)
-        # keep only last 100 logs
-        store[task_id]["result"]["logs"] = store[task_id]["result"]["logs"][-100:]
+        if isinstance(msg, str):
+            if "__IMAGE_DONE__" in msg:
+                completed += 1
+                if total_images:
+                    progress = min(100, int((completed / total_images) * 100))
+                    store[task_id]["result"]["progress"] = progress
+                continue
+                
+            store[task_id]["last_log"] = msg
+            if "logs" not in store[task_id]["result"]:
+                store[task_id]["result"]["logs"] = []
+            store[task_id]["result"]["logs"].append(msg)
+            # keep only last 100 logs
+            store[task_id]["result"]["logs"] = store[task_id]["result"]["logs"][-100:]
 
 async def _run_generation(task_id: str, req: GenerateRequest):
     queue = mp.Queue()
@@ -178,6 +185,9 @@ async def _run_generation(task_id: str, req: GenerateRequest):
         finally:
             await db.close()
             
+        # Delete input directory to save space
+        shutil.rmtree(input_dir, ignore_errors=True)
+
         _task_store[task_id]["status"] = "done"
         _task_store[task_id]["result"]["output_dir"] = output_dir
         _task_store[task_id]["result"]["input_dir"] = input_dir
@@ -209,32 +219,137 @@ async def generate_synthetic_data(
     return {"task_id": task_id, "status": "pending"}
 
 
-async def _run_evaluation(eval_task_id: str, gen_task_id: str, eval_type: str):
+async def _run_evaluation(eval_task_id: str, req: EvaluateRequest):
     queue = mp.Queue()
     _task_store[eval_task_id]["result"] = {"logs": []}
     
     reader_thread = threading.Thread(target=_queue_reader, args=(queue, eval_task_id, _task_store, None))
     reader_thread.start()
 
+    base_dir = os.path.abspath(os.path.join("data", "evaluation", eval_task_id))
+    real_dir = os.path.join(base_dir, "real")
+    syn_dir = os.path.join(base_dir, "synthetic")
+    
     try:
         _task_store[eval_task_id]["status"] = "running"
-        gen_info = _task_store.get(gen_task_id)
-        if not gen_info or gen_info["status"] != "done":
-            raise Exception("유효하지 않은 생성 태스크이거나 완료되지 않았습니다.")
-            
-        input_dir = gen_info["result"]["input_dir"]
-        output_dir = gen_info["result"]["output_dir"]
         
-        # We run evaluators in a separate process to avoid memory leaks
-        # and to keep them isolated from the main FastAPI process.
+        # 1. Query synthetic images
+        db = await shard_router.get_session_for_dataset(req.dataset_id)
+        try:
+            query = select(Image).where(Image.dataset_id == req.dataset_id, Image.upload_batch_id == req.synthetic_batch_id)
+            result = await db.execute(query)
+            syn_images = result.scalars().all()
+        finally:
+            await db.close()
+            
+        if not syn_images:
+            raise Exception("평가 대상 합성 배치에 이미지가 없습니다.")
+
+        # 2. Process copying for evaluation
+        if req.eval_type in ["domain_gap", "lpips"]:
+            os.makedirs(real_dir, exist_ok=True)
+            os.makedirs(syn_dir, exist_ok=True)
+            
+            db = await shard_router.get_session_for_dataset(req.dataset_id)
+            try:
+                query = select(Image).where(Image.dataset_id == req.dataset_id)
+                if req.real_batch_id:
+                    query = query.where(Image.upload_batch_id == req.real_batch_id)
+                else:
+                    # If real_batch_id is not specified, get all images that are NOT synthetic
+                    query = query.where(
+                        (Image.upload_batch_id == None) | (~Image.upload_batch_id.like("synthetic_%"))
+                    )
+                result = await db.execute(query)
+                real_images = result.scalars().all()
+            finally:
+                await db.close()
+                
+            if not real_images:
+                raise Exception("비교 대상 원본 배치에 이미지가 없습니다.")
+                
+            # Helper to clean filename for comparison
+            def clean_name(name):
+                if len(name) > 9 and name[8] == '_':
+                    name = name[9:]
+                if name.startswith("syn_"):
+                    name = name[4:]
+                elif name.startswith("syn"):
+                    name = name[3:]
+                return name
+
+            # Match and copy pairs
+            copied_count = 0
+            for syn_img in syn_images:
+                matched_real = None
+                
+                # A. Try finding a real image where syn_img.filename ends with f"_syn_{real_img.filename}"
+                for r_img in real_images:
+                    if syn_img.filename.endswith(f"_syn_{r_img.filename}"):
+                        matched_real = r_img
+                        break
+                
+                # B. Try finding a real image by splitting by _syn_ and taking the last part
+                if not matched_real and "_syn_" in syn_img.filename:
+                    suffix = syn_img.filename.split("_syn_")[-1]
+                    for r_img in real_images:
+                        if r_img.filename == suffix:
+                            matched_real = r_img
+                            break
+                            
+                # C. Try slicing first 9 chars (hex prefix)
+                if not matched_real and len(syn_img.filename) > 9:
+                    stripped = syn_img.filename[9:]
+                    for r_img in real_images:
+                        if stripped == f"syn_{r_img.filename}" or stripped == r_img.filename:
+                            matched_real = r_img
+                            break
+                            
+                # D. Fallback to cleaned name comparison
+                if not matched_real:
+                    clean_syn = clean_name(syn_img.filename)
+                    for r_img in real_images:
+                        if clean_name(r_img.filename) == clean_syn:
+                            matched_real = r_img
+                            break
+                
+                if matched_real:
+                    real_src = resolve_filepath(matched_real.filepath)
+                    syn_src = resolve_filepath(syn_img.filepath)
+                    
+                    if os.path.exists(real_src) and os.path.exists(syn_src):
+                        shutil.copy2(real_src, os.path.join(real_dir, matched_real.filename))
+                        # LPIPS evaluation expects files in syn_dir to be named f"syn_{real_filename}" or matching real_filename
+                        shutil.copy2(syn_src, os.path.join(syn_dir, f"syn_{matched_real.filename}"))
+                        copied_count += 1
+                        
+            if copied_count == 0:
+                # Fallback to copy all as is
+                for syn_img in syn_images:
+                    src_path = resolve_filepath(syn_img.filepath)
+                    if os.path.exists(src_path):
+                        shutil.copy2(src_path, os.path.join(syn_dir, syn_img.filename))
+                for r_img in real_images:
+                    src_path = resolve_filepath(r_img.filepath)
+                    if os.path.exists(src_path):
+                        shutil.copy2(src_path, os.path.join(real_dir, r_img.filename))
+        else:
+            # Quality evaluation only needs synthetic images
+            os.makedirs(syn_dir, exist_ok=True)
+            for img in syn_images:
+                src_path = resolve_filepath(img.filepath)
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, os.path.join(syn_dir, img.filename))
+        
+        # 3. Run evaluation in separate process
         ctx = mp.get_context('spawn')
         
-        if eval_type == "domain_gap":
-            p = ctx.Process(target=run_domain_gap_eval, args=(input_dir, output_dir, 32, True, queue))
-        elif eval_type == "lpips":
-            p = ctx.Process(target=run_lpips_eval, args=(input_dir, output_dir, 'alex', True, queue))
-        elif eval_type == "quality":
-            p = ctx.Process(target=run_quality_eval, args=(output_dir, True, queue))
+        if req.eval_type == "domain_gap":
+            p = ctx.Process(target=run_domain_gap_eval, args=(real_dir, syn_dir, 32, True, queue))
+        elif req.eval_type == "lpips":
+            p = ctx.Process(target=run_lpips_eval, args=(real_dir, syn_dir, 'alex', True, queue))
+        elif req.eval_type == "quality":
+            p = ctx.Process(target=run_quality_eval, args=(syn_dir, True, queue))
         else:
             raise Exception("지원하지 않는 평가 타입입니다.")
             
@@ -253,6 +368,7 @@ async def _run_evaluation(eval_task_id: str, gen_task_id: str, eval_type: str):
         _task_store[eval_task_id]["status"] = "error"
         _task_store[eval_task_id]["error"] = str(e)
     finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
         queue.put(None)
         reader_thread.join()
 
@@ -268,8 +384,8 @@ async def evaluate_synthetic_data(
         "error": None,
         "last_log": "",
         "eval_type": req.eval_type,
-        "gen_task_id": req.task_id
+        "req": req.model_dump()
     }
     
-    background_tasks.add_task(_run_evaluation, eval_task_id, req.task_id, req.eval_type)
+    background_tasks.add_task(_run_evaluation, eval_task_id, req)
     return {"task_id": eval_task_id, "status": "pending"}

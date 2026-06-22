@@ -48,6 +48,9 @@ class DatasetVersion(Base):
     # 무결성 체크용: 스냅샷 시점의 이미지 ID 해시 (MD5)
     image_ids_hash: Mapped[str] = mapped_column(String(64), default="")
 
+    # 물리 스냅샷 파일 경로 (JSON, Images + Annotations 전체 덤프)
+    snapshot_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # 태그 (예: "학습용", "검증용")
     tags: Mapped[str] = mapped_column(String(200), default="")
 

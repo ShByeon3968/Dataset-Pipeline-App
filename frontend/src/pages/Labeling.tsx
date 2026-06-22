@@ -10,7 +10,7 @@ import { imagesApi } from '../api/images'
 import { annotationsApi } from '../api/annotations'
 import { classesApi } from '../api/classes'
 import { useAppStore } from '../store'
-import type { Annotation } from '../types'
+import type { Annotation, Image } from '../types'
 
 const CANVAS_W = 700
 const CANVAS_H = 500
@@ -235,6 +235,22 @@ export default function LabelingPage() {
     enabled: !!selectedDataset && !!currentImage,
   })
 
+  const [originalImage, setOriginalImage] = useState<Image | null>(null)
+
+  useEffect(() => {
+    setOriginalImage(null)
+    if (currentImage && (currentImage.upload_batch_id?.startsWith('synthetic_') || currentImage.filename.startsWith('syn_'))) {
+      const origFilename = currentImage.filename.replace(/^syn_/, '')
+      imagesApi.getByFilename(selectedDataset!.id, origFilename)
+        .then(img => {
+          setOriginalImage(img)
+        })
+        .catch(err => {
+          console.warn('Original image not found:', err)
+        })
+    }
+  }, [currentImage, selectedDataset])
+
   // Annotation counts by type (for summary)
   const manualCount = annotations?.filter((a) => !a.is_auto_generated).length ?? 0
   const autoCount = annotations?.filter((a) => a.is_auto_generated).length ?? 0
@@ -421,21 +437,45 @@ export default function LabelingPage() {
             )}
           </div>
 
-          {currentImage ? (
-            <BBoxCanvas
-              imageUrl={imagesApi.getFileUrl(currentImage.dataset_id, currentImage.id)}
-              annotations={annotations ?? []}
-              selectedClass={selectedClassObj ? { id: selectedClassObj.id, color: selectedClassObj.color } : null}
-              onAdd={(bbox) => addAnn.mutate(bbox)}
-            />
-          ) : (
-            <div
-              style={{ width: CANVAS_W, height: CANVAS_H }}
-              className="flex items-center justify-center bg-gray-50 border rounded-lg text-gray-400 text-sm"
-            >
-              {total === 0 ? 'Upload images first.' : 'Loading image...'}
+          <div className="flex gap-4 items-start flex-wrap lg:flex-nowrap">
+            {originalImage && (
+              <div className="flex flex-col items-center">
+                <span className="text-xs font-semibold text-gray-500 mb-2">Original Image (Reference)</span>
+                <div 
+                  style={{ width: 400, height: CANVAS_H, border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' }}
+                  className="bg-gray-100 flex items-center justify-center relative"
+                >
+                  <img 
+                    src={imagesApi.getFileUrl(originalImage.dataset_id, originalImage.id)} 
+                    alt="Original"
+                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                  />
+                  <div className="absolute top-2 left-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded font-mono">
+                    {originalImage.filename}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex flex-col items-center">
+              {originalImage && <span className="text-xs font-semibold text-gray-500 mb-2">Synthetic Image (Labeling Canvas)</span>}
+              {currentImage ? (
+                <BBoxCanvas
+                  imageUrl={imagesApi.getFileUrl(currentImage.dataset_id, currentImage.id)}
+                  annotations={annotations ?? []}
+                  selectedClass={selectedClassObj ? { id: selectedClassObj.id, color: selectedClassObj.color } : null}
+                  onAdd={(bbox) => addAnn.mutate(bbox)}
+                />
+              ) : (
+                <div
+                  style={{ width: CANVAS_W, height: CANVAS_H }}
+                  className="flex items-center justify-center bg-gray-50 border rounded-lg text-gray-400 text-sm"
+                >
+                  {total === 0 ? 'Upload images first.' : 'Loading image...'}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {/* ── Side panel ───────────────────────────────────── */}

@@ -318,6 +318,20 @@ async def upload_zip_annotated(
     return {"task_id": task_id, "status": "pending"}
 
 
+@router.get("/by-filename/{filename}", response_model=ImageRead)
+async def get_image_by_filename(
+    dataset_id: int,
+    filename: str,
+    db: AsyncSession = Depends(get_sharded_db),
+):
+    query = select(Image).where(Image.dataset_id == dataset_id, Image.filename == filename)
+    result = await db.execute(query)
+    img = result.scalar()
+    if not img:
+        raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
+    return ImageRead.model_validate(img)
+
+
 # ── 단일 이미지 조회 ─────────────────────────────────────────────────
 
 @router.get("/{image_id}", response_model=ImageRead)
@@ -367,11 +381,9 @@ async def delete_image(
 
     await db.execute(sa_delete(Annotation).where(Annotation.image_id == image_id))
 
-    try:
-        abs_path = resolve_filepath(img.filepath)
-        delete_file(abs_path)
-    except Exception:
-        pass  # 파일이 없어도 DB 레코드는 삭제
+    # [Soft Delete 정책] 물리 파일은 삭제하지 않고 보존합니다.
+    # 버전 스냅샷 롤백 시 물리 파일이 남아있어야 완전 복구가 가능합니다.
+    # 디스크 공간이 필요할 때는 버저닝 페이지의 "고아 파일 정리(GC)" 기능을 사용하세요.
 
     await db.delete(img)
     await db.commit()

@@ -38,6 +38,7 @@ class DatasetVersionRead(BaseModel):
     class_distribution: list[dict[str, Any]]
     image_ids_hash: str
     tags: str
+    has_snapshot: bool = False  # 롤백 가능 여부 (snapshot_path 존재 여부)
 
     model_config = {"from_attributes": True}
 
@@ -46,6 +47,9 @@ class DatasetVersionRead(BaseModel):
         import json
         data = {c.key: getattr(obj, c.key) for c in obj.__table__.columns}
         data["class_distribution"] = json.loads(obj.class_distribution or "[]")
+        # snapshot_path는 내부 경로이므로 노출하지 않고, 존재 여부만 전달
+        snapshot_path = data.pop("snapshot_path", None)
+        data["has_snapshot"] = bool(snapshot_path and __import__("os").path.exists(snapshot_path))
         return cls(**data)
 
 

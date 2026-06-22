@@ -40,6 +40,7 @@ def run_lpips_eval(input_dir: str, output_dir: str, net: str, use_gpu: bool, que
         print(f"Found {len(image_files)} potential images in '{input_dir}' directory.")
         
         scores = []
+        details = []
         for filename in image_files:
             orig_path = os.path.join(input_dir, filename)
             gen_filename = f"syn_{filename}"
@@ -63,6 +64,7 @@ def run_lpips_eval(input_dir: str, output_dir: str, net: str, use_gpu: bool, que
                     dist = loss_fn(im_orig, im_gen).item()
                     
                 scores.append(dist)
+                details.append({"filename": filename, "score": round(dist, 4)})
                 print(f"Image: {filename} | LPIPS Score: {dist:.4f}")
                 
             except Exception as e:
@@ -82,5 +84,13 @@ def run_lpips_eval(input_dir: str, output_dir: str, net: str, use_gpu: bool, que
         print(f"Average LPIPS Distance: {avg_score:.4f}")
         print(f"Standard Deviation: {std_score:.4f}")
         print("="*50)
+
+        metrics = {
+            "avg_score": float(avg_score),
+            "std_score": float(std_score),
+            "total_pairs": len(scores),
+            "details": details
+        }
+        queue.put({"__METRICS__": metrics})
     except Exception as e:
         print(f"Error in LPIPS Eval: {e}")

@@ -57,3 +57,7 @@ transformers>=4.45.0
 accelerate>=0.31.0
 sentencepiece
 protobuf
+
+# Evaluation Metrics
+lpips>=0.1.4
+piq>=0.8.0

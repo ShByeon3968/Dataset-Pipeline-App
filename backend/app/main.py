@@ -22,7 +22,7 @@ from app.routers import (
 from app.routers.ontology import rules_router
 from app.routers.analysis import analysis_router as coco_analysis_router
 from app.routers import sharding as sharding_router
-from app.routers.versions import router as versions_router
+from app.routers.versions import router as versions_router, gc_router as versions_gc_router
 from app.routers.lineage import model_router as model_versions_router, lineage_router
 from app.routers.auto_label import router as auto_label_router
 from app.routers.onnx_models import router as onnx_models_router
@@ -95,6 +95,7 @@ app.include_router(rules_router, prefix=API_PREFIX)
 app.include_router(export_router.router, prefix=API_PREFIX)
 app.include_router(sharding_router.router, prefix=API_PREFIX)
 app.include_router(versions_router, prefix=API_PREFIX)
+app.include_router(versions_gc_router, prefix=API_PREFIX)
 app.include_router(model_versions_router, prefix=API_PREFIX)
 app.include_router(lineage_router, prefix=API_PREFIX)
 app.include_router(auto_label_router, prefix=API_PREFIX)

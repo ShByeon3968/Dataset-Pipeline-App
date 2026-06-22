@@ -78,6 +78,30 @@ export const versionsApi = {
   unlinkModel: (linkId: number) =>
     client.delete(`/model-versions/links/${linkId}`),
 
+  // ── 롤백 ────────────────────────────────────────────────────
+  rollback: (datasetId: number, versionId: number) =>
+    client
+      .post<{
+        version_id: number
+        version_name: string
+        restored_images: number
+        restored_annotations: number
+        missing_physical_files: string[]
+      }>(`/datasets/${datasetId}/versions/${versionId}/rollback`)
+      .then(r => r.data),
+
+  // ── Garbage Collection ───────────────────────────────────────
+  gc: (datasetId: number) =>
+    client
+      .post<{
+        deleted: string[]
+        deleted_count: number
+        kept: number
+        freed_bytes: number
+        freed_mb: number
+      }>(`/datasets/${datasetId}/gc`)
+      .then(r => r.data),
+
   // ── 리니지 그래프 ────────────────────────────────────────────
   getLineage: (datasetId: number) =>
     client.get<LineageGraph>(`/datasets/${datasetId}/lineage`).then(r => r.data),

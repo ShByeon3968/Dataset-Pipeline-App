@@ -28,6 +28,7 @@ export interface Image {
   format: string | null
   file_hash: string | null
   phash: string | null
+  upload_batch_id: string | null
   created_at: string
   annotations: Annotation[]
 }
@@ -164,6 +165,7 @@ export interface DatasetVersion {
   class_distribution: ClassDistItem[]
   image_ids_hash: string
   tags: string
+  has_snapshot: boolean
 }
 
 export interface DatasetVersionCreate {
